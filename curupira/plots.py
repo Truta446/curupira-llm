@@ -10,6 +10,7 @@ matplotlib.use("Agg")  # no window, just files
 import matplotlib.pyplot as plt  # noqa: E402
 
 from curupira.dataset import ROOT  # noqa: E402
+from curupira.text_stats import WordStats  # noqa: E402
 from curupira.training import LossPoint  # noqa: E402
 
 ASSETS_DIR: Final = ROOT / "assets"
@@ -123,6 +124,66 @@ def save_lr_schedule(schedule: Sequence[float], stem: str) -> None:
     ASSETS_DIR.mkdir(exist_ok=True)
     for theme in (LIGHT, DARK):
         plot_lr_schedule(schedule, ASSETS_DIR / f"{stem}_{theme.name}.png", theme)
+
+
+def plot_temperature_sweep(
+    points: Sequence[tuple[float, WordStats]], reference: WordStats, path: Path, theme: Theme
+) -> None:
+    """Share of real words and of distinct words, as the temperature goes up."""
+    temps = [t for t, _ in points]
+    real = [s.real_pct for _, s in points]
+    distinct = [s.distinct_pct for _, s in points]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=160)
+    fig.patch.set_facecolor(theme.surface)
+    ax.set_facecolor(theme.surface)
+
+    ax.axhline(reference.real_pct, color=theme.muted, linewidth=1, linestyle=(0, (5, 4)))
+    ax.text(temps[0], reference.real_pct + 2.5, f"Machado de verdade: {reference.real_pct:.0f}% reais",
+            color=theme.muted, fontsize=9, ha="left",
+            bbox={"facecolor": theme.surface, "edgecolor": "none", "pad": 1.5})
+
+    ax.plot(temps, real, color=theme.train, linewidth=2, marker="o", markersize=5,
+            label="palavras que existem nos livros")
+    ax.plot(temps, distinct, color=theme.val, linewidth=2, marker="o", markersize=5,
+            label="palavras diferentes entre si")
+
+    ax.annotate(f"reais {real[-1]:.0f}%", (temps[-1], real[-1]), textcoords="offset points",
+                xytext=(8, -4), color=theme.train, fontsize=10, weight="bold")
+    ax.annotate(f"distintas {distinct[-1]:.0f}%", (temps[-1], distinct[-1]), textcoords="offset points",
+                xytext=(8, -4), color=theme.val, fontsize=10, weight="bold")
+
+    ax.set_title("Temperature: mais alta = mais variedade, e mais palavras inventadas",
+                 color=theme.ink, fontsize=12, loc="left", pad=14)
+    ax.set_xlabel("temperature", color=theme.muted, fontsize=10)
+    ax.set_ylabel("% das palavras geradas (3+ letras)", color=theme.muted, fontsize=10)
+    ax.tick_params(colors=theme.muted, labelsize=9)
+    ax.grid(axis="y", color=theme.grid, linewidth=1)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(theme.grid)
+    leg = ax.legend(loc="lower left", frameon=False, fontsize=10)
+    for text in leg.get_texts():
+        text.set_color(theme.ink)
+    span = temps[-1] - temps[0]
+    ax.set_xlim(temps[0] - span * 0.04, temps[-1] + span * 0.22)
+    ax.set_ylim(0, 105)
+
+    fig.tight_layout()
+    fig.savefig(path, facecolor=theme.surface)
+    plt.close(fig)
+    print(f"  saved {path.relative_to(ROOT)}")
+
+
+def save_temperature_sweep(
+    points: Sequence[tuple[float, WordStats]], reference: WordStats, stem: str
+) -> None:
+    """Write assets/<stem>_light.png and assets/<stem>_dark.png."""
+    ASSETS_DIR.mkdir(exist_ok=True)
+    for theme in (LIGHT, DARK):
+        plot_temperature_sweep(points, reference, ASSETS_DIR / f"{stem}_{theme.name}.png", theme)
 
 
 def save_both_themes(

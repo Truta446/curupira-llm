@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from curupira.models.attention import Head
 from curupira.ops import LayerNorm, cross_entropy
+from curupira.sampling import sample_next
 
 
 class MultiHeadAttention(nn.Module):
@@ -96,13 +97,18 @@ class GPT(nn.Module):
         return logits, loss
 
     @torch.no_grad()
-    def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
+    def generate(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+    ) -> torch.Tensor:
         # idx: (B, T) starting context
         for _ in range(max_new_tokens):
             cropped = idx[:, -self.block_size :]  # (B, min(T, block_size)): positions beyond have no embedding
             logits, _ = self(cropped)  # (B, T, V)
             last = logits[:, -1, :]  # (B, V) only the last position predicts what comes next
-            probs = torch.softmax(last, dim=-1)  # (B, V)
-            nxt = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            nxt = sample_next(last, temperature, top_k)  # (B, V) -> (B, 1)
             idx = torch.cat([idx, nxt], dim=1)  # (B, T) -> (B, T+1)
         return idx

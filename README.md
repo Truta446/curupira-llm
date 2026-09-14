@@ -175,6 +175,63 @@ Diálogo com travessão, nomes próprios, vírgulas e pontos no lugar certo, e t
 
 </details>
 
+### Geração: como escolher a próxima letra
+
+O modelo não escreve: ele devolve uma probabilidade para cada um dos 116 caracteres, e **alguém precisa sortear um**. O jeito de sortear muda o texto sem mexer em nenhum peso.
+
+- **Temperature** divide os scores antes do softmax. Abaixo de 1, a favorita fica ainda mais favorita; acima de 1, as chances se achatam.
+- **Top-k** descarta tudo fora das `k` mais prováveis, cortando a "cauda longa" de letras improváveis que, somadas, ainda saem de vez em quando.
+
+Depois de `"Capitu olhou para mim e "`, o modelo hesita entre ~18 caracteres (`a` 15%, `d` 12%, `p` 8%…). Com temperature 0,5 cai para ~9; com 1,5 sobe para ~26.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/phase6_temperature_dark.png">
+  <img src="assets/phase6_temperature_light.png" alt="Com temperature maior, caem as palavras reais e sobem as palavras distintas" width="100%">
+</picture>
+
+Medindo 3.200 caracteres gerados por configuração (palavras de 3+ letras):
+
+| Configuração | Palavras que existem nos livros | Palavras distintas |
+|---|---:|---:|
+| Machado de verdade | 97,8% | 61,0% |
+| temperature 0,3 | 94,7% | 39,3% |
+| temperature 0,7 | 81,3% | 72,6% |
+| temperature 0,9 | 70,4% | 73,6% |
+| temperature 1,3 | 46,5% | 87,2% |
+| temperature 2,0 | 17,6% | 95,7% |
+| **temperature 0,8 + top-k 20** | **73,3%** | **75,8%** |
+
+Não existe configuração que ganhe nas duas colunas: é uma troca entre **acertar** e **variar**. No extremo, o *greedy* (sempre a mais provável) entra em loop:
+
+```
+... A mesma cousa de casa. A mesma cousa de casa. A mesma cousa de casa. A mesma cousa de casa.
+```
+
+<details>
+<summary><b>O mesmo prompt em três momentos do treino</b> (temperature 0,8, top-k 20, mesma semente)</summary>
+
+**Passo 1000** — loss 1,859, 43% de palavras reais
+```
+Capitu olhou para mim e ande de mais escretosenciantos agre um crespou. Não vaspelho,
+de phivia a costo da e casa elle semeda. Eu a vija ella a estimente-te.
+```
+
+**Passo 2000** — loss 1,612, 63% de palavras reais
+```
+Capitu olhou para mim e andar. O maria de alguns boltas, que estreveu para elle..
+Esteve não sera com medico, não sem póde da verdade parel-a.
+```
+
+**Passo 4000** — loss 1,451, 73% de palavras reais
+```
+Capitu olhou para mim e andar. O mettes já o seu bom de Escobar, annos e o capitel-o,
+de philosopho de que eu não escreverada. Eu abriu-se a mão para almato.
+```
+
+No passo 4000 aparece **Escobar**, o amigo de Bentinho em *Dom Casmurro* — o modelo associou o nome ao contexto de Capitu.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -184,8 +241,8 @@ Diálogo com travessão, nomes próprios, vírgulas e pontos no lugar certo, e t
 | 3 | Self-attention: uma cabeça, passo a passo | ✅ |
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
-| 6 | Geração: temperature e top-k | 🚧 |
-| 7 | Upgrades modernos: BPE, RoPE, RMSNorm, SwiGLU, KV-cache | ⏳ |
+| 6 | Geração: temperature e top-k | ✅ |
+| 7 | Upgrades modernos: BPE, RoPE, RMSNorm, SwiGLU, KV-cache | 🚧 |
 
 ## Começando
 
@@ -199,6 +256,10 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase3 --device cpu   # self-attention passo a passo (~3 min)
 .venv/bin/python -m scripts.phase4 --device cpu   # blocos Transformer (~20 min; 30 s em GPU)
 .venv/bin/python -m scripts.phase5                # treino de verdade + checkpoints (~1 min em GPU)
+.venv/bin/python -m scripts.phase6 --device cpu   # temperature, top-k e 3 checkpoints (~3 min)
+
+# brinque com o modelo treinado
+.venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
 ```
 
 Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máquina (Core Ultra 9 275HX com 24 threads, RTX 5060):
@@ -207,6 +268,7 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 |---|---:|---:|
 | `phase4` (1500 passos, dois modelos) | ~20 min | 30 s |
 | `phase5` (4000 passos) | ~80 min (~1,1 s/passo) | 1 min |
+| `phase6` (só geração, sem treino) | 3 min | — |
 
 Tudo roda em CPU; só demora. Para experimentar a fase 5 em CPU, `--steps 1000 --warmup 100` leva ~20 min.
 
@@ -219,13 +281,16 @@ curupira/            a biblioteca
   ops.py             cross_entropy, LayerNorm e os otimizadores SGD e AdamW, à mão
   training.py        estimate_loss, agendamento da taxa (warmup + cosine)
   checkpoint.py      ModelConfig, save_checkpoint e load_checkpoint
+  sampling.py        temperature, top-k, greedy e o sorteio da próxima letra
+  text_stats.py      % de palavras reais e distintas no texto gerado
   plots.py           gráficos em versão clara e escura
   models/
     bigram.py        BigramLM: uma tabela (V, V)
     attention.py     Head: uma cabeça causal + AttentionLM
     transformer.py   MultiHeadAttention, FeedForward, Block e GPT
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase5.py
+  prepare_data.py  phase1.py … phase6.py
+  generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)
 checkpoints/         modelos salvos: best.pt e um a cada 1000 passos (fora do versionamento)
