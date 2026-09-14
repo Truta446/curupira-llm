@@ -1,5 +1,6 @@
-"""Evaluation helpers shared by the phase scripts."""
+"""Evaluation and schedule helpers shared by the phase scripts."""
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -16,6 +17,24 @@ class LossPoint:
     step: int
     train: float
     val: float
+
+
+def lr_at(step: int, max_lr: float, min_lr: float, warmup_steps: int, total_steps: int) -> float:
+    """Learning rate for `step`: linear warmup, then a cosine decay to min_lr.
+
+    Warmup: the first updates happen when the weights are still random and
+    Adam's running averages are unreliable; a big step there can wreck the
+    model (or produce NaN). So the rate ramps up from ~0.
+
+    Cosine decay: big steps early to cross the landscape fast, then smaller and
+    smaller steps to settle into a minimum instead of bouncing around it.
+    """
+    if step < warmup_steps:
+        return max_lr * (step + 1) / warmup_steps
+    if step >= total_steps:
+        return min_lr
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)  # 0.0 -> 1.0
+    return min_lr + 0.5 * (1 + math.cos(math.pi * progress)) * (max_lr - min_lr)
 
 
 @torch.no_grad()

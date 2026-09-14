@@ -50,8 +50,12 @@ def plot_loss_curve(
         ax.axhline(value, color=theme.muted, linewidth=1, linestyle=(0, (5, 4)))
         # Spread the labels horizontally: reference levels can sit very close
         # together, and stacked text would overlap.
-        ax.text(steps[-1] * (0.16 + 0.30 * i), value + (ylim[1] - ylim[0]) * 0.02,
-                f"{label}  {value:.2f}", color=theme.muted, fontsize=9, ha="left")
+        # A halo in the surface color keeps the label readable where it crosses
+        # the curve, and the labels are spread horizontally because reference
+        # levels can sit very close to each other.
+        ax.text(steps[-1] * (0.16 + 0.30 * i), value + (ylim[1] - ylim[0]) * 0.025,
+                f"{label}  {value:.2f}", color=theme.muted, fontsize=9, ha="left",
+                bbox={"facecolor": theme.surface, "edgecolor": "none", "pad": 1.5})
 
     ax.plot(steps, [h.train for h in history], color=theme.train, linewidth=2, label="treino")
     ax.plot(steps, [h.val for h in history], color=theme.val, linewidth=2, label="validação")
@@ -82,6 +86,43 @@ def plot_loss_curve(
     fig.savefig(path, facecolor=theme.surface)
     plt.close(fig)
     print(f"  saved {path.relative_to(ROOT)}")
+
+
+def plot_lr_schedule(schedule: Sequence[float], path: Path, theme: Theme) -> None:
+    """Save the learning-rate curve: warmup ramp then cosine decay."""
+    fig, ax = plt.subplots(figsize=(8, 3.2), dpi=160)
+    fig.patch.set_facecolor(theme.surface)
+    ax.set_facecolor(theme.surface)
+
+    ax.plot(range(len(schedule)), schedule, color=theme.train, linewidth=2)
+    peak = max(range(len(schedule)), key=lambda i: schedule[i])
+    ax.annotate(f"pico {schedule[peak]:.1e}", (peak, schedule[peak]), textcoords="offset points",
+                xytext=(12, 10), color=theme.train, fontsize=10, weight="bold")
+
+    ax.set_title("Taxa de aprendizado: warmup linear e depois cosine decay",
+                 color=theme.ink, fontsize=12, loc="left", pad=12)
+    ax.set_xlabel("passo de treino", color=theme.muted, fontsize=10)
+    ax.set_ylabel("learning rate", color=theme.muted, fontsize=10)
+    ax.tick_params(colors=theme.muted, labelsize=9)
+    ax.grid(axis="y", color=theme.grid, linewidth=1)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(theme.grid)
+    ax.set_ylim(0, max(schedule) * 1.2)
+
+    fig.tight_layout()
+    fig.savefig(path, facecolor=theme.surface)
+    plt.close(fig)
+    print(f"  saved {path.relative_to(ROOT)}")
+
+
+def save_lr_schedule(schedule: Sequence[float], stem: str) -> None:
+    """Write assets/<stem>_light.png and assets/<stem>_dark.png."""
+    ASSETS_DIR.mkdir(exist_ok=True)
+    for theme in (LIGHT, DARK):
+        plot_lr_schedule(schedule, ASSETS_DIR / f"{stem}_{theme.name}.png", theme)
 
 
 def save_both_themes(

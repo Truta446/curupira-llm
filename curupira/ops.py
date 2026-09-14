@@ -49,6 +49,72 @@ class LayerNorm(nn.Module):
         return self.gamma * normalized + self.beta             # (..., C)
 
 
+class AdamW:
+    """Adam with decoupled weight decay, written by hand.
+
+    Three ideas stacked on plain SGD:
+      1. momentum (m): a running average of the gradient, as in SGD+momentum;
+      2. per-parameter scaling (v): a running average of the gradient SQUARED.
+         Dividing by its square root gives every parameter its own step size,
+         so rare parameters (a rare character's embedding) still move;
+      3. decoupled weight decay: pull every weight slightly toward zero, as a
+         separate step. "Decoupled" (the W in AdamW) means it is NOT added to
+         the gradient, so the v-scaling does not distort it.
+
+    Bias correction: m and v start at zero, so early on they underestimate.
+    Dividing by (1 - beta**t) fixes exactly that bias.
+    """
+
+    params: list[torch.Tensor]
+    m: list[torch.Tensor]
+    v: list[torch.Tensor]
+
+    def __init__(
+        self,
+        params: Iterable[torch.Tensor],
+        lr: float,
+        betas: tuple[float, float] = (0.9, 0.95),
+        eps: float = 1e-8,
+        weight_decay: float = 0.1,
+    ) -> None:
+        self.params = list(params)
+        self.lr = lr
+        self.beta1, self.beta2 = betas
+        self.eps = eps
+        self.weight_decay = weight_decay
+        self.t = 0  # step counter, for the bias correction
+        self.m = [torch.zeros_like(p) for p in self.params]  # 1st moment, same shape as p
+        self.v = [torch.zeros_like(p) for p in self.params]  # 2nd moment, same shape as p
+        # Decay matrices only. Biases and LayerNorm gains (1-D tensors) are not
+        # "weights" in the usual sense; shrinking them just hurts.
+        self.decay_mask = [p.dim() >= 2 for p in self.params]
+
+    @torch.no_grad()
+    def step(self, lr: float | None = None) -> None:
+        """One update. `lr` overrides the base rate, so a schedule can drive it."""
+        step_lr = self.lr if lr is None else lr
+        self.t += 1
+        bias1 = 1 - self.beta1**self.t
+        bias2 = 1 - self.beta2**self.t
+        for p, m, v, decay in zip(self.params, self.m, self.v, self.decay_mask):
+            if p.grad is None:
+                continue
+            g = p.grad  # same shape as p
+            m.mul_(self.beta1).add_(g, alpha=1 - self.beta1)          # m = b1*m + (1-b1)*g
+            v.mul_(self.beta2).addcmul_(g, g, value=1 - self.beta2)   # v = b2*v + (1-b2)*g^2
+
+            m_hat = m / bias1  # same shape as p
+            v_hat = v / bias2  # same shape as p
+
+            if decay and self.weight_decay > 0:
+                p.mul_(1 - step_lr * self.weight_decay)  # decoupled: applied straight to p
+            p.addcdiv_(m_hat, v_hat.sqrt() + self.eps, value=-step_lr)
+
+    def zero_grad(self) -> None:
+        for p in self.params:
+            p.grad = None
+
+
 class SGD:
     """Stochastic gradient descent with optional momentum, written by hand.
 

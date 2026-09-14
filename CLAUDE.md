@@ -34,13 +34,16 @@ Fases:
 - **Em toda função nova, comentar o shape dos tensores em cada passo**, ex.: `# x: (B, T, C) -> (B, T, head_size)`. Convenção: `B` = batch, `T` = tamanho do contexto, `C` = dimensão do embedding, `V` = tamanho do vocabulário.
 - **Tipagem**: tudo tipado. Type hints em toda função, método, atributo de classe e constante relevante; argumentos de CLI convertidos para uma `@dataclass(frozen=True)` em vez de usar `argparse.Namespace` solto. Verificar com `npx --yes pyright@latest --pythonpath .venv/bin/python .` (config em `pyrightconfig.json`); a meta é zero erro. O pyright não é dependência do projeto, só ferramenta de conferência.
 - **Idioma**: código, nomes de arquivos, identificadores, comentários e saídas dos scripts sempre em **inglês**. Explicações ao usuário, mensagens de commit e README em português.
-- **Estrutura**: a biblioteca fica em `curupira/` (`tokenizer.py`, `dataset.py`, `ops.py`, `training.py`, `plots.py` e `models/` com `bigram.py`, `attention.py`, `transformer.py`); os scripts de cada fase ficam em `scripts/` (`prepare_data.py`, `phaseN.py`). Nada de código novo na raiz. Rodar sempre da raiz, como módulo: `.venv/bin/python -m scripts.phaseN`. Caminhos de `data/` e `assets/` são derivados de `ROOT` com `pathlib`, não de `cwd`.
+- **Estrutura**: a biblioteca fica em `curupira/` (`tokenizer.py`, `dataset.py`, `ops.py` com `cross_entropy`/`LayerNorm`/`SGD`/`AdamW`, `training.py` com `estimate_loss`/`lr_at`, `checkpoint.py`, `plots.py` e `models/` com `bigram.py`, `attention.py`, `transformer.py`); os scripts de cada fase ficam em `scripts/` (`prepare_data.py`, `phaseN.py`). Nada de código novo na raiz. Rodar sempre da raiz, como módulo: `.venv/bin/python -m scripts.phaseN`. Caminhos de `data/` e `assets/` são derivados de `ROOT` com `pathlib`, não de `cwd`.
 - Ao criar uma fase nova: modelo em `curupira/models/`, peças reutilizáveis em `curupira/ops.py`, e o script `scripts/phaseN.py` só orquestra e imprime.
 
 ## Ambiente
 
 - Usar o virtualenv do projeto: `.venv/bin/python` (Python 3.12, torch com CUDA, numpy, matplotlib já instalados).
 - Hardware do usuário: Intel Core Ultra 9 275HX (24 threads), 30 GB de RAM, RTX 5060 Laptop (8 GB). O disco está ~96% cheio: manter checkpoints pequenos e poucos.
+- Velocidade medida do GPT de 4 blocos (C=128, B=32, T=128, ~838k parâmetros): ~1,1 s/passo em CPU e ~15 ms/passo em GPU. Para validar treinos longos, rodar com `--device cuda`, mas documentar sempre o tempo em CPU no README.
+- Scripts que escrevem em `assets/` têm `--no-plot`; ao medir tempo ou testar, usar `--no-plot` e fazer backup de `checkpoints/` antes (a fase 5 sobrescreve `best.pt`, que a fase 6 usa).
+- Resultados até a fase 5 (loss de validação): bigram 2,367 → uma cabeça 2,323 → 4 blocos com SGD 1,887 → 4 blocos com AdamW + warmup/cosine, 4000 passos, **1,4515** (`checkpoints/best.pt`; snapshots `step01000.pt` … `step04000.pt`).
 
 ## Dados
 
