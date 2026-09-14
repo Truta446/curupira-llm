@@ -18,6 +18,9 @@ checkpoints/
 *.pth
 *.ckpt
 
+# Ferramentas locais
+.claude/
+
 # Editor / SO
 .vscode/
 .idea/
