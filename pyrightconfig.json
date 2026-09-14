@@ -1,0 +1,8 @@
+{
+  "include": ["*.py"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard",
+  "reportMissingTypeStubs": false
+}

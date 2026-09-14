@@ -11,19 +11,23 @@ from ops import cross_entropy
 
 
 class BigramLM(nn.Module):
-    def __init__(self, vocab_size):
+    table: nn.Parameter
+
+    def __init__(self, vocab_size: int) -> None:
         super().__init__()
         # Zeros = every next token equally likely = the uniform guess, loss ln(V).
         self.table = nn.Parameter(torch.zeros(vocab_size, vocab_size))  # (V, V)
 
-    def forward(self, idx, targets=None):
+    def forward(
+        self, idx: torch.Tensor, targets: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # idx: (B, T) token ids
         logits = self.table[idx]  # row lookup: (B, T) -> (B, T, V)
         loss = None if targets is None else cross_entropy(logits, targets)  # scalar
         return logits, loss
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens):
+    def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         # idx: (B, T) starting context
         for _ in range(max_new_tokens):
             logits, _ = self(idx)  # (B, T, V)

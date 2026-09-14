@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" width="1280" height="420" role="img" aria-label="curupira-llm: a GPT built from scratch that only looks backwards">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a241b"/>
+      <stop offset="1" stop-color="#15432f"/>
+    </linearGradient>
+    <linearGradient id="fire" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff4d1a"/>
+      <stop offset="1" stop-color="#ffc53d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff7a2f" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ff7a2f" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ffb347"/>
+    </marker>
+    <!-- a footprint with the toes on the LEFT: facing backwards -->
+    <g id="foot">
+      <path d="M-14,-12 C8,-16 30,-10 32,0 C34,10 10,16 -14,12 C-24,9 -24,-9 -14,-12 z" fill="#f4efe1" fill-opacity="0.85"/>
+      <circle cx="-26" cy="-10" r="5.5" fill="#f4efe1" fill-opacity="0.85"/>
+      <circle cx="-30" cy="-1" r="4.5" fill="#f4efe1" fill-opacity="0.85"/>
+      <circle cx="-29" cy="7" r="4" fill="#f4efe1" fill-opacity="0.85"/>
+      <circle cx="-25" cy="14" r="3.5" fill="#f4efe1" fill-opacity="0.85"/>
+    </g>
+  </defs>
+
+  <rect width="1280" height="420" fill="url(#bg)"/>
+
+  <!-- forest silhouettes -->
+  <g fill="#0f3326" opacity="0.9">
+    <path d="M0,420 L0,330 Q60,280 120,330 Q170,270 240,325 Q300,290 360,340 L360,420 z"/>
+    <path d="M880,420 L900,340 Q980,280 1060,335 Q1130,285 1200,330 Q1250,300 1280,320 L1280,420 z"/>
+  </g>
+
+  <!-- title -->
+  <text x="80" y="138" font-family="Georgia, 'Times New Roman', serif" font-size="92" font-weight="700" fill="#f4efe1" letter-spacing="-1">curupira<tspan fill="url(#fire)">-llm</tspan></text>
+  <text x="84" y="190" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="28" fill="#cfe3d6">Um GPT construído do zero em PyTorch, para entender cada peça.</text>
+
+  <!-- token row: the last token attends only to the past -->
+  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="30" text-anchor="middle">
+    <g fill="#1d5a41" stroke="#3f8a67" stroke-width="2">
+      <rect x="80"  y="300" width="56" height="60" rx="10"/>
+      <rect x="146" y="300" width="56" height="60" rx="10"/>
+      <rect x="212" y="300" width="56" height="60" rx="10"/>
+      <rect x="278" y="300" width="56" height="60" rx="10"/>
+      <rect x="344" y="300" width="56" height="60" rx="10"/>
+      <rect x="410" y="300" width="56" height="60" rx="10"/>
+      <rect x="476" y="300" width="56" height="60" rx="10"/>
+      <rect x="542" y="300" width="56" height="60" rx="10"/>
+      <rect x="608" y="300" width="56" height="60" rx="10"/>
+      <rect x="674" y="300" width="56" height="60" rx="10"/>
+      <rect x="740" y="300" width="56" height="60" rx="10"/>
+    </g>
+    <g fill="#f4efe1">
+      <text x="108" y="341">D</text>
+      <text x="174" y="341">o</text>
+      <text x="240" y="341">m</text>
+      <text x="306" y="341">·</text>
+      <text x="372" y="341">C</text>
+      <text x="438" y="341">a</text>
+      <text x="504" y="341">s</text>
+      <text x="570" y="341">m</text>
+      <text x="636" y="341">u</text>
+      <text x="702" y="341">r</text>
+      <text x="768" y="341">r</text>
+    </g>
+    <circle cx="834" cy="330" r="70" fill="url(#glow)"/>
+    <rect x="806" y="300" width="56" height="60" rx="10" fill="url(#fire)"/>
+    <text x="834" y="341" fill="#0a241b" font-weight="700">?</text>
+  </g>
+
+  <!-- attention arcs, pointing backwards -->
+  <g fill="none" stroke="#ffb347" stroke-linecap="round" marker-end="url(#arrow)">
+    <path d="M834,296 Q801,250 768,294" stroke-width="4" stroke-opacity="0.95"/>
+    <path d="M834,296 Q768,232 702,294" stroke-width="3.2" stroke-opacity="0.8"/>
+    <path d="M834,296 Q735,220 636,294" stroke-width="2.4" stroke-opacity="0.65"/>
+    <path d="M834,296 Q603,205 372,294" stroke-width="1.8" stroke-opacity="0.45"/>
+    <path d="M834,296 Q471,190 108,294" stroke-width="1.2" stroke-opacity="0.3"/>
+  </g>
+  <text x="84" y="392" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" fill="#9cc7b1">causal: cada token só enxerga o passado para prever o próximo</text>
+
+  <!-- backwards footprints walking to the right -->
+  <g>
+    <use href="#foot" transform="translate(1000,140) rotate(-6)"/>
+    <use href="#foot" transform="translate(1075,185) rotate(4)"/>
+    <use href="#foot" transform="translate(1150,140) rotate(-6)"/>
+    <use href="#foot" transform="translate(1225,185) rotate(4)"/>
+  </g>
+  <text x="1112" y="245" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" fill="#9cc7b1">os pés apontam para trás</text>
+</svg>

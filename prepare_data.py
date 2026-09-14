@@ -13,9 +13,10 @@ Usage:
 import os
 import re
 import urllib.request
+from typing import Final
 
 # Gutenberg id -> title
-BOOKS = {
+BOOKS: Final[dict[int, str]] = {
     53101: "A Mão e a Luva",
     67162: "Helena",
     67780: "Iaiá Garcia",
@@ -25,13 +26,13 @@ BOOKS = {
     56737: "Esaú e Jacó",
     55797: "Memorial de Aires",
 }
-URL = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
-DATA_DIR = "data"
-RAW_DIR = os.path.join(DATA_DIR, "raw")
-VAL_FRACTION = 0.1
+URL: Final = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
+DATA_DIR: Final = "data"
+RAW_DIR: Final = os.path.join(DATA_DIR, "raw")
+VAL_FRACTION: Final = 0.1
 
 
-def download(book_id):
+def download(book_id: int) -> str:
     path = os.path.join(RAW_DIR, f"pg{book_id}.txt")
     if not os.path.exists(path):
         print(f"  downloading {URL.format(id=book_id)}")
@@ -42,7 +43,7 @@ def download(book_id):
         return f.read()
 
 
-def clean(text):
+def clean(text: str) -> list[str]:
     """Return the book as a list of paragraphs, one string per paragraph."""
     text = text.replace("\r\n", "\n")  # Gutenberg files use CRLF line endings
 
@@ -53,7 +54,7 @@ def clean(text):
 
     text = text.replace("_", "")  # _italic_ is markup, not language
 
-    paragraphs = []
+    paragraphs: list[str] = []
     for block in re.split(r"\n\s*\n", text):  # paragraphs are separated by a blank line
         # Inside a paragraph the line breaks every ~70 columns are just layout:
         # join them so the model doesn't waste capacity predicting fake "\n".
@@ -65,9 +66,10 @@ def clean(text):
     return paragraphs
 
 
-def main():
+def main() -> None:
     os.makedirs(RAW_DIR, exist_ok=True)
-    train_parts, val_parts = [], []
+    train_parts: list[str] = []
+    val_parts: list[str] = []
 
     for book_id, title in BOOKS.items():
         paragraphs = clean(download(book_id))

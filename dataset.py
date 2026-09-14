@@ -11,14 +11,14 @@ TRAIN_FILE = "data/train.txt"
 VAL_FILE = "data/val.txt"
 
 
-def pick_device(requested="auto"):
+def pick_device(requested: str = "auto") -> str:
     """'auto' uses cuda when available, otherwise cpu. Anything else is honored."""
     if requested == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return requested
 
 
-def load_data():
+def load_data() -> tuple[CharTokenizer, torch.Tensor, torch.Tensor]:
     """Read the texts, build the tokenizer and return (tokenizer, train, val).
 
     The vocabulary is built from train + val together. At char level this is
@@ -39,7 +39,13 @@ def load_data():
     return tok, train, val
 
 
-def get_batch(data, batch_size, block_size, device="cpu", generator=None):
+def get_batch(
+    data: torch.Tensor,
+    batch_size: int,
+    block_size: int,
+    device: str | torch.device = "cpu",
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample `batch_size` windows of `block_size` tokens from `data`.
 
     Returns (x, y), where y is x shifted one position forward in the text:
@@ -49,8 +55,8 @@ def get_batch(data, batch_size, block_size, device="cpu", generator=None):
     # data: (N,)
     # Random start positions. The (exclusive) upper bound is N - block_size so
     # that i + block_size + 1 <= N, i.e. y fits inside the tensor.
-    ix = torch.randint(len(data) - block_size, (batch_size,), generator=generator)
-    # ix: (B,)
+    ix: list[int] = torch.randint(len(data) - block_size, (batch_size,), generator=generator).tolist()
+    # ix: B ints
 
     x = torch.stack([data[i : i + block_size] for i in ix])
     # each slice: (T,) -> stacked: x: (B, T)

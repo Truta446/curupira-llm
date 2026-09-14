@@ -8,24 +8,37 @@ Usage:
 import argparse
 import math
 import time
+from dataclasses import dataclass
 
 import torch
 
 from dataset import get_batch, load_data, pick_device
 
 
-def section(title):
-    print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
+@dataclass(frozen=True)
+class Args:
+    device: str
+    batch_size: int
+    block_size: int
+    seed: int
 
 
-def main():
+def parse_args() -> Args:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--device", default="auto", help="auto | cpu | cuda")
     p.add_argument("--batch-size", type=int, default=32, help="B proposed for the next phases")
     p.add_argument("--block-size", type=int, default=128, help="T (context length) proposed")
     p.add_argument("--seed", type=int, default=1337)
-    args = p.parse_args()
+    ns = p.parse_args()
+    return Args(device=ns.device, batch_size=ns.batch_size, block_size=ns.block_size, seed=ns.seed)
 
+
+def section(title: str) -> None:
+    print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
+
+
+def main() -> None:
+    args = parse_args()
     device = pick_device(args.device)
     torch.manual_seed(args.seed)
     g = torch.Generator().manual_seed(args.seed)  # reproducible batches
@@ -50,12 +63,12 @@ def main():
     print(repr("".join(tok.chars)))
 
     counts = torch.bincount(train, minlength=V)  # train: (N,) -> counts: (V,)
-    order = torch.argsort(counts, descending=True)  # (V,) ids from most to least frequent
+    order: list[int] = torch.argsort(counts, descending=True).tolist()  # V ids, most to least frequent
     print("\nmost frequent:")
-    for i in order[:12].tolist():
+    for i in order[:12]:
         print(f"  {tok.itos[i]!r:>6}  id={i:<3} {counts[i].item():>9,}")
     print("rarest:")
-    for i in order[-10:].tolist():
+    for i in order[-10:]:
         print(f"  {tok.itos[i]!r:>6}  id={i:<3} {counts[i].item():>9,}")
 
     # ------------------------------------------------------------------
@@ -79,9 +92,9 @@ def main():
     # ------------------------------------------------------------------
     section("5. One window of T=8 tokens holds 8 prediction problems")
     for t in range(8):
-        context = x[0, : t + 1]  # (t+1,)
-        target = y[0, t]         # scalar
-        print(f"  context {tok.decode(context)!r:<12} -> next {tok.decode([target.item()])!r}")
+        context = x[0, : t + 1]      # (t+1,)
+        target = int(y[0, t].item())  # scalar
+        print(f"  context {tok.decode(context)!r:<12} -> next {tok.decode([target])!r}")
 
     # ------------------------------------------------------------------
     section(f"6. Batch at the proposed size (B={args.batch_size}, T={args.block_size})")
