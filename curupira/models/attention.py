@@ -13,7 +13,7 @@ Intuition for the three projections of a token:
 import torch
 import torch.nn as nn
 
-from ops import cross_entropy
+from curupira.ops import cross_entropy
 
 
 class Head(nn.Module):

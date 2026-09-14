@@ -1,8 +1,8 @@
 """Phase 1: inspect the corpus, the char-level tokenizer and get_batch.
 
 Usage:
-    .venv/bin/python prepare_data.py   # once: download and clean the corpus
-    .venv/bin/python phase1.py         # inspection
+    .venv/bin/python -m scripts.prepare_data   # once: download and clean the corpus
+    .venv/bin/python -m scripts.phase1         # inspection
 """
 
 import argparse
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import torch
 
-from dataset import get_batch, load_data, pick_device
+from curupira.dataset import get_batch, load_data, pick_device
 
 
 @dataclass(frozen=True)

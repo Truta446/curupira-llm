@@ -1,14 +1,20 @@
 """Load tokenized data and sample batches.
 
-Assumes `prepare_data.py` has already produced data/train.txt and data/val.txt.
+Assumes `scripts/prepare_data.py` has already produced data/train.txt and
+data/val.txt at the repository root.
 """
+
+from pathlib import Path
+from typing import Final
 
 import torch
 
-from tokenizer import CharTokenizer
+from curupira.tokenizer import CharTokenizer
 
-TRAIN_FILE = "data/train.txt"
-VAL_FILE = "data/val.txt"
+ROOT: Final = Path(__file__).resolve().parent.parent  # repository root
+DATA_DIR: Final = ROOT / "data"
+TRAIN_FILE: Final = DATA_DIR / "train.txt"
+VAL_FILE: Final = DATA_DIR / "val.txt"
 
 
 def pick_device(requested: str = "auto") -> str:
@@ -25,10 +31,8 @@ def load_data() -> tuple[CharTokenizer, torch.Tensor, torch.Tensor]:
     safe (it leaks no content, only the character set) and prevents a rare
     validation character from having no id.
     """
-    with open(TRAIN_FILE, encoding="utf-8") as f:
-        train_text = f.read()
-    with open(VAL_FILE, encoding="utf-8") as f:
-        val_text = f.read()
+    train_text = TRAIN_FILE.read_text(encoding="utf-8")
+    val_text = VAL_FILE.read_text(encoding="utf-8")
 
     tok = CharTokenizer.from_text(train_text + val_text)
 

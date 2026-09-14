@@ -7,12 +7,12 @@ Output:
     data/val.txt          last 10% of each book
 
 Usage:
-    .venv/bin/python prepare_data.py
+    .venv/bin/python -m scripts.prepare_data
 """
 
-import os
 import re
 import urllib.request
+from pathlib import Path
 from typing import Final
 
 # Gutenberg id -> title
@@ -27,20 +27,20 @@ BOOKS: Final[dict[int, str]] = {
     55797: "Memorial de Aires",
 }
 URL: Final = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
-DATA_DIR: Final = "data"
-RAW_DIR: Final = os.path.join(DATA_DIR, "raw")
+ROOT: Final = Path(__file__).resolve().parent.parent
+DATA_DIR: Final = ROOT / "data"
+RAW_DIR: Final = DATA_DIR / "raw"
 VAL_FRACTION: Final = 0.1
 
 
 def download(book_id: int) -> str:
-    path = os.path.join(RAW_DIR, f"pg{book_id}.txt")
-    if not os.path.exists(path):
+    path = RAW_DIR / f"pg{book_id}.txt"
+    if not path.exists():
         print(f"  downloading {URL.format(id=book_id)}")
         req = urllib.request.Request(URL.format(id=book_id), headers={"User-Agent": "curupira-llm"})
-        with urllib.request.urlopen(req) as r, open(path, "wb") as f:
-            f.write(r.read())
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+        with urllib.request.urlopen(req) as r:
+            path.write_bytes(r.read())
+    return path.read_text(encoding="utf-8")
 
 
 def clean(text: str) -> list[str]:
@@ -67,7 +67,7 @@ def clean(text: str) -> list[str]:
 
 
 def main() -> None:
-    os.makedirs(RAW_DIR, exist_ok=True)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
     train_parts: list[str] = []
     val_parts: list[str] = []
 
@@ -92,10 +92,8 @@ def main() -> None:
     # Books separated by one blank line.
     train = "\n\n".join(train_parts) + "\n"
     val = "\n\n".join(val_parts) + "\n"
-    with open(os.path.join(DATA_DIR, "train.txt"), "w", encoding="utf-8") as f:
-        f.write(train)
-    with open(os.path.join(DATA_DIR, "val.txt"), "w", encoding="utf-8") as f:
-        f.write(val)
+    (DATA_DIR / "train.txt").write_text(train, encoding="utf-8")
+    (DATA_DIR / "val.txt").write_text(val, encoding="utf-8")
     print(f"\ntrain.txt: {len(train):,} chars | val.txt: {len(val):,} chars")
 
 

@@ -64,7 +64,9 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | Chute uniforme (não sabe nada) | 0 | 4,754 | 4,754 |
 | Bigram por contagem (o melhor possível) | — | 2,345 | **2,367** |
 | Bigram treinado com SGD | 13.456 | 2,351 | 2,372 |
-| **Uma cabeça de self-attention** | 35.444 | 2,296 | **2,323** |
+| Uma cabeça de self-attention | 35.444 | 2,296 | 2,323 |
+| 1 bloco Transformer | 244.340 | 1,856 | 1,898 |
+| **4 blocos Transformer** | 838.004 | 1,849 | **1,887** |
 
 O treino, sozinho, **redescobriu as estatísticas do livro**: chegou ao mesmo número que se obtém contando pares de letras. A tabela aprendida faz sentido — depois de `q` vem `u` com 100%, e depois de uma quebra de linha vem `-` em 48% dos casos, porque os diálogos de Machado começam com `--`.
 
@@ -107,6 +109,35 @@ Ainda é conversa fiada, mas já aparecem "Não", "que a" e sílabas mais longas
 
 </details>
 
+### O bloco Transformer
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/phase4_loss_dark.png">
+  <img src="assets/phase4_loss_light.png" alt="Curva de loss com blocos Transformer: cai para 1,89, bem abaixo do bigram" width="100%">
+</picture>
+
+Quatro peças, cada uma resolvendo um limite da cabeça única:
+
+| Peça | O que resolve |
+|---|---|
+| **Multi-head** | Várias perguntas ao mesmo tempo: uma cabeça acompanha a palavra anterior, outra a pontuação, outra o começo da frase |
+| **MLP** | Depois de buscar a informação, é preciso *pensar* sobre ela; a atenção só faz médias ponderadas |
+| **Residual** | `x + f(x)`: uma via expressa que deixa o gradiente chegar às primeiras camadas sem encolher |
+| **LayerNorm** | Mantém os números em escala sã (média 0, desvio 1) a cada camada, senão pilhas fundas explodem |
+
+<details>
+<summary><b>Texto gerado com 4 blocos</b></summary>
+
+```
+--Ph! umplo; Maescielonjudeu-lhe famou-o que estrado, pares, manco não um
+xincesto, debosse Ho é algunessano um pouco com que no esque erquito. Até
+quere forque sente algummentardar. Não abamis.
+```
+
+Agora há palavras inteiras e corretas ("que", "não", "um pouco com que", "sente"), pontuação no lugar e travessões de diálogo. A sintaxe ainda não se sustenta — é o que as fases 5 a 7 vão atacar.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -114,8 +145,8 @@ Ainda é conversa fiada, mas já aparecem "Não", "que a" e sílabas mais longas
 | 1 | Corpus, tokenizer char-level, split e `get_batch` | ✅ |
 | 2 | Baseline bigram, cross-entropy e SGD à mão | ✅ |
 | 3 | Self-attention: uma cabeça, passo a passo | ✅ |
-| 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | 🚧 |
-| 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ⏳ |
+| 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
+| 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | 🚧 |
 | 6 | Geração: temperature e top-k | ⏳ |
 | 7 | Upgrades modernos: BPE, RoPE, RMSNorm, SwiGLU, KV-cache | ⏳ |
 
@@ -125,25 +156,33 @@ Ainda é conversa fiada, mas já aparecem "Não", "que a" e sílabas mais longas
 python -m venv .venv
 .venv/bin/pip install torch numpy matplotlib
 
-.venv/bin/python prepare_data.py          # baixa e limpa o corpus (uma vez)
-.venv/bin/python phase1.py --device cpu   # inspeciona dados e tokenizer
-.venv/bin/python phase2.py --device cpu   # treina o bigram (~1 min em CPU)
-.venv/bin/python phase3.py --device cpu   # self-attention passo a passo (~2 min em CPU)
+.venv/bin/python -m scripts.prepare_data          # baixa e limpa o corpus (uma vez)
+.venv/bin/python -m scripts.phase1 --device cpu   # inspeciona dados e tokenizer
+.venv/bin/python -m scripts.phase2 --device cpu   # treina o bigram (~1 min)
+.venv/bin/python -m scripts.phase3 --device cpu   # self-attention passo a passo (~3 min)
+.venv/bin/python -m scripts.phase4 --device cpu   # blocos Transformer (~20 min; 30 s em GPU)
 ```
 
-Use `--device cpu` para forçar a CPU; sem a flag, o código usa a GPU se houver.
+Sem a flag `--device`, o código usa a GPU se houver. Medido nesta máquina (Core Ultra 9, 24 threads), a fase 4 leva ~20 min em CPU e 30 s em GPU. Dá para usar `--steps 500` e esperar ~7 min, mas aí a loss para em ~2,33, sem ganho sobre a fase 3: o modelo é maior e precisa de mais passos.
 
-## Os arquivos
+## Organização
 
-| Arquivo | O que faz |
-|---|---|
-| `prepare_data.py` | Baixa os livros, remove a licença do Gutenberg e a diagramação, e separa os 10% finais de **cada** livro para validação |
-| `tokenizer.py` | `CharTokenizer`: cada caractere vira um inteiro (vocabulário de 116 símbolos) |
-| `dataset.py` | `load_data`, `get_batch` (janelas `x: (B, T)` e alvos `y: (B, T)`) e `pick_device` |
-| `ops.py` | `cross_entropy` e o otimizador `SGD` (com momento), ambos escritos à mão |
-| `bigram.py` | `BigramLM`: uma tabela `(V, V)`, com `forward` e `generate` |
-| `attention.py` | `Head`: uma cabeça causal (query/key/value, máscara, escala `1/sqrt(d)`, softmax) e `AttentionLM` |
-| `phase1.py` … `phase3.py` | Um script por fase, que demonstra e mede o que foi construído |
+```
+curupira/            a biblioteca
+  tokenizer.py       CharTokenizer: cada caractere vira um inteiro
+  dataset.py         load_data, get_batch (x: (B,T), y: (B,T)), pick_device
+  ops.py             cross_entropy, LayerNorm e o otimizador SGD, à mão
+  training.py        estimate_loss e o registro da curva de loss
+  plots.py           gráficos em versão clara e escura
+  models/
+    bigram.py        BigramLM: uma tabela (V, V)
+    attention.py     Head: uma cabeça causal + AttentionLM
+    transformer.py   MultiHeadAttention, FeedForward, Block e GPT
+scripts/             um script por fase: só orquestra, mede e imprime
+  prepare_data.py  phase1.py  phase2.py  phase3.py  phase4.py
+assets/              banner e gráficos do README
+data/                corpus baixado (fora do versionamento)
+```
 
 Código, nomes e comentários em inglês; documentação e explicações em português. `data/` e `checkpoints/` não são versionados.
 

@@ -6,20 +6,21 @@
 4. Print the attention matrix again, now that it has learned something.
 
 Usage:
-    .venv/bin/python phase3.py --device cpu
+    .venv/bin/python -m scripts.phase3 --device cpu
 """
 
 import argparse
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
-from attention import AttentionLM, Head
-from dataset import get_batch, load_data, pick_device
-from ops import SGD
+from curupira.dataset import get_batch, load_data, pick_device
+from curupira.models.attention import AttentionLM, Head
+from curupira.ops import SGD
+from curupira.training import estimate_loss
 
 BIGRAM_VAL_LOSS = 2.37  # the number to beat, from phase 2
 
@@ -73,28 +74,6 @@ def print_attention(attention: torch.Tensor, tokens: Sequence[str]) -> None:
         cells = "".join(f"{v * 100:5.0f}" if v > 0 else "    ." for v in row)
         print(f"  {labels[t]:>5} |{cells}   soma {sum(row):.2f}")
     print("  (leia a linha: quanto o token da linha puxa de cada token da coluna)")
-
-
-@torch.no_grad()
-def estimate_loss(
-    model: nn.Module,
-    splits: Mapping[str, torch.Tensor],
-    batch_size: int,
-    block_size: int,
-    iters: int,
-    device: str,
-) -> dict[str, float]:
-    model.eval()
-    out: dict[str, float] = {}
-    for name, data in splits.items():
-        losses = torch.zeros(iters)  # (iters,)
-        for k in range(iters):
-            x, y = get_batch(data, batch_size, block_size, device)  # (B, T), (B, T)
-            _, loss = model(x, y)
-            losses[k] = loss.item()
-        out[name] = float(losses.mean().item())
-    model.train()
-    return out
 
 
 def main() -> None:

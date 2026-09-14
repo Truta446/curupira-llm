@@ -7,7 +7,7 @@ The whole model is one (V, V) table. Row i holds the scores (logits) for
 import torch
 import torch.nn as nn
 
-from ops import cross_entropy
+from curupira.ops import cross_entropy
 
 
 class BigramLM(nn.Module):

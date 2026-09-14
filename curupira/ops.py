@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 
 import torch
+import torch.nn as nn
 
 
 def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -24,6 +25,28 @@ def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     log_prob = correct - log_norm  # (B*T,) log-probability of the right token, <= 0
 
     return -log_prob.mean()  # scalar
+
+
+class LayerNorm(nn.Module):
+    """Normalize each token's vector to mean 0 and std 1, then rescale.
+
+    Written by hand instead of nn.LayerNorm. Note it normalizes ACROSS THE
+    CHANNELS of one token: every token is normalized on its own, so nothing
+    leaks from one position to another (which would break causality).
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.ones(dim))  # (C,) learned scale
+        self.beta = nn.Parameter(torch.zeros(dim))  # (C,) learned shift
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., C)
+        mean = x.mean(dim=-1, keepdim=True)                    # (..., 1)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)      # (..., 1)
+        normalized = (x - mean) / torch.sqrt(var + self.eps)   # (..., C), mean 0 / std 1
+        return self.gamma * normalized + self.beta             # (..., C)
 
 
 class SGD:
