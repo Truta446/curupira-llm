@@ -19,7 +19,7 @@ O projeto avança em fases. **Nunca avance de fase sozinho.** Ao fim de cada fas
 
 Fases:
 1. Dados + tokenizer char-level, split treino/validação, `get_batch`.
-2. Baseline bigram (uma embedding table). Sua loss de validação é o número a bater.
+2. Baseline bigram (uma embedding table). Sua loss de validação é o número a bater: **≈ 2,37** (chute uniforme = ln(116) = 4,75).
 3. Self-attention manual, UMA cabeça passo a passo (Q/K/V, máscara causal, escala 1/sqrt(d), softmax); imprimir a matriz de atenção.
 4. Multi-head + MLP + residual + LayerNorm = bloco Transformer; empilhar N blocos.
 5. Loop de treino real: AdamW, warmup + cosine decay, avaliação periódica, checkpoints, gráfico de loss treino vs validação.
@@ -33,7 +33,7 @@ Fases:
 - Tudo precisa rodar em CPU: device automático (`cuda` se disponível, senão `cpu`), com opção de forçar via flag `--device`. Configs pequenas: dataset de alguns MB, modelo de ~1–10M parâmetros.
 - **Em toda função nova, comentar o shape dos tensores em cada passo**, ex.: `# x: (B, T, C) -> (B, T, head_size)`. Convenção: `B` = batch, `T` = tamanho do contexto, `C` = dimensão do embedding, `V` = tamanho do vocabulário.
 - **Idioma**: código, nomes de arquivos, identificadores, comentários e saídas dos scripts sempre em **inglês**. Explicações ao usuário, mensagens de commit e README em português.
-- Módulos atuais: `prepare_data.py` (download + limpeza + split por livro), `tokenizer.py` (`CharTokenizer`), `dataset.py` (`load_data`, `get_batch`, `pick_device`), `phaseN.py` (script de demonstração/inspeção de cada fase). Rodar sempre a partir da raiz do repo (caminhos `data/...` são relativos).
+- Módulos atuais: `prepare_data.py` (download + limpeza + split por livro), `tokenizer.py` (`CharTokenizer`), `dataset.py` (`load_data`, `get_batch`, `pick_device`), `ops.py` (peças escritas à mão reutilizáveis, ex. `cross_entropy`), `bigram.py` (`BigramLM`), `phaseN.py` (script de demonstração/inspeção de cada fase). Rodar sempre a partir da raiz do repo (caminhos `data/...` são relativos).
 
 ## Ambiente
 

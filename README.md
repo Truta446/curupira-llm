@@ -15,7 +15,7 @@ otimizador são implementados à mão, sem HuggingFace, `transformers` ou
 | Fase | Conteúdo | Status |
 |---|---|---|
 | 1 | Dados + tokenizer char-level + `get_batch` | ✅ |
-| 2 | Baseline bigram | ⏳ |
+| 2 | Baseline bigram | ✅ |
 | 3 | Self-attention (uma cabeça, passo a passo) | ⏳ |
 | 4 | Bloco Transformer (multi-head, MLP, residual, LayerNorm) | ⏳ |
 | 5 | Loop de treino (AdamW, warmup + cosine, checkpoints, curvas) | ⏳ |
@@ -46,6 +46,31 @@ otimizador são implementados à mão, sem HuggingFace, `transformers` ou
 ```bash
 .venv/bin/python prepare_data.py   # baixa e limpa (uma vez)
 .venv/bin/python phase1.py         # inspeção (use --device cpu para forçar CPU)
+```
+
+### Fase 2: baseline bigram
+
+O modelo mais simples possível: prevê o próximo caractere olhando **só o
+caractere atual**. O modelo inteiro é uma tabela 116×116 (13.456 parâmetros).
+
+- **`ops.py`**: `cross_entropy` escrita à mão, sem `F.cross_entropy`.
+- **`bigram.py`**: `BigramLM`, com a tabela, o `forward` (que devolve logits
+  `(B, T, V)` e a loss) e o `generate` (que amostra um caractere por vez).
+- **`phase2.py`**: calcula o bigram "perfeito" só **contando** pares de
+  caracteres. Depois treina a tabela com SGD escrito à mão e mostra que chega
+  ao mesmo número. Por fim, espia a tabela aprendida (depois de `q` vem `u` com
+  100% de chance) e gera texto.
+
+| Modelo | Loss treino | Loss validação |
+|---|---|---|
+| Chute uniforme | 4,754 | 4,754 |
+| Bigram por contagem | 2,345 | 2,367 |
+| Bigram treinado (3000 passos, SGD lr=50) | 2,351 | 2,372 |
+
+**Número a bater nas próximas fases: loss de validação ≈ 2,37.**
+
+```bash
+.venv/bin/python phase2.py --device cpu   # ~1 min
 ```
 
 Código e comentários estão em inglês; a documentação, em português.
