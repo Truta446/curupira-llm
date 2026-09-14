@@ -1,5 +1,7 @@
 """Hand-written building blocks shared by the models."""
 
+from collections.abc import Iterable
+
 import torch
 
 
@@ -22,3 +24,33 @@ def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     log_prob = correct - log_norm  # (B*T,) log-probability of the right token, <= 0
 
     return -log_prob.mean()  # scalar
+
+
+class SGD:
+    """Stochastic gradient descent with optional momentum, written by hand.
+
+    Without momentum each step follows only the current batch's gradient, which
+    zig-zags. Momentum keeps a running average of past gradients (the "velocity"),
+    so consistent directions build up speed and noisy ones cancel out.
+    """
+
+    params: list[torch.Tensor]
+    velocity: list[torch.Tensor]
+
+    def __init__(self, params: Iterable[torch.Tensor], lr: float, momentum: float = 0.0) -> None:
+        self.params = list(params)
+        self.lr = lr
+        self.momentum = momentum
+        self.velocity = [torch.zeros_like(p) for p in self.params]  # same shape as each parameter
+
+    @torch.no_grad()
+    def step(self) -> None:
+        for p, v in zip(self.params, self.velocity):
+            if p.grad is None:
+                continue
+            v.mul_(self.momentum).add_(p.grad)  # v = momentum * v + grad
+            p -= self.lr * v                    # walk downhill along the smoothed direction
+
+    def zero_grad(self) -> None:
+        for p in self.params:
+            p.grad = None

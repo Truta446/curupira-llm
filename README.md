@@ -64,6 +64,7 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | Chute uniforme (não sabe nada) | 0 | 4,754 | 4,754 |
 | Bigram por contagem (o melhor possível) | — | 2,345 | **2,367** |
 | Bigram treinado com SGD | 13.456 | 2,351 | 2,372 |
+| **Uma cabeça de self-attention** | 35.444 | 2,296 | **2,323** |
 
 O treino, sozinho, **redescobriu as estatísticas do livro**: chegou ao mesmo número que se obtém contando pares de letras. A tabela aprendida faz sentido — depois de `q` vem `u` com 100%, e depois de uma quebra de linha vem `-` em 48% dos casos, porque os diálogos de Machado começam com `--`.
 
@@ -79,14 +80,41 @@ Tem cara de português, mas não diz nada: sem memória além da letra anterior,
 
 </details>
 
+### A atenção, olhando só para trás
+
+Cada posição distribui 100% da sua atenção entre as posições **anteriores** — o triângulo de cima é sempre zero. Depois de treinar, a cabeça aprende a procurar o que importa:
+
+```
+              D    o    m    _    C    a    s    m    u    r    r    o   <- lido
+      D |  100    .    .    .    .    .    .    .    .    .    .    .
+      o |   49   51    .    .    .    .    .    .    .    .    .    .
+      m |   90    9    1    .    .    .    .    .    .    .    .    .
+      _ |    0    0   99    1    .    .    .    .    .    .    .    .
+      C |    1    0    0    2   97    .    .    .    .    .    .    .
+      u |    1    3    4    0    1    1    4   62   24    .    .    .
+      r |    1    0    0    2    0    0    1    0    0   74   20    .
+```
+
+<details>
+<summary><b>Texto gerado com uma cabeça de atenção</b></summary>
+
+```
+---Nãe sium que a gre va puevetre. Te cas oria. a e ses fifre das la.
+---ma de num ceuver e petisom, apussaide vressareda porra, quu daçã saponue
+```
+
+Ainda é conversa fiada, mas já aparecem "Não", "que a" e sílabas mais longas.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
 |---|---|:---:|
 | 1 | Corpus, tokenizer char-level, split e `get_batch` | ✅ |
 | 2 | Baseline bigram, cross-entropy e SGD à mão | ✅ |
-| 3 | Self-attention: uma cabeça, passo a passo | 🚧 |
-| 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ⏳ |
+| 3 | Self-attention: uma cabeça, passo a passo | ✅ |
+| 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | 🚧 |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ⏳ |
 | 6 | Geração: temperature e top-k | ⏳ |
 | 7 | Upgrades modernos: BPE, RoPE, RMSNorm, SwiGLU, KV-cache | ⏳ |
@@ -100,6 +128,7 @@ python -m venv .venv
 .venv/bin/python prepare_data.py          # baixa e limpa o corpus (uma vez)
 .venv/bin/python phase1.py --device cpu   # inspeciona dados e tokenizer
 .venv/bin/python phase2.py --device cpu   # treina o bigram (~1 min em CPU)
+.venv/bin/python phase3.py --device cpu   # self-attention passo a passo (~2 min em CPU)
 ```
 
 Use `--device cpu` para forçar a CPU; sem a flag, o código usa a GPU se houver.
@@ -111,9 +140,10 @@ Use `--device cpu` para forçar a CPU; sem a flag, o código usa a GPU se houver
 | `prepare_data.py` | Baixa os livros, remove a licença do Gutenberg e a diagramação, e separa os 10% finais de **cada** livro para validação |
 | `tokenizer.py` | `CharTokenizer`: cada caractere vira um inteiro (vocabulário de 116 símbolos) |
 | `dataset.py` | `load_data`, `get_batch` (janelas `x: (B, T)` e alvos `y: (B, T)`) e `pick_device` |
-| `ops.py` | `cross_entropy` escrita à mão, sem `F.cross_entropy` |
+| `ops.py` | `cross_entropy` e o otimizador `SGD` (com momento), ambos escritos à mão |
 | `bigram.py` | `BigramLM`: uma tabela `(V, V)`, com `forward` e `generate` |
-| `phase1.py`, `phase2.py` | Um script por fase, que demonstra e mede o que foi construído |
+| `attention.py` | `Head`: uma cabeça causal (query/key/value, máscara, escala `1/sqrt(d)`, softmax) e `AttentionLM` |
+| `phase1.py` … `phase3.py` | Um script por fase, que demonstra e mede o que foi construído |
 
 Código, nomes e comentários em inglês; documentação e explicações em português. `data/` e `checkpoints/` não são versionados.
 
