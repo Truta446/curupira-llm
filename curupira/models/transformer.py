@@ -10,17 +10,19 @@ Phase 7 upgrades are switched on through GPT's keyword arguments, one at a
 time, so every variant is the same code with a single piece swapped.
 """
 
+import math
 from typing import Literal
 
 import torch
 import torch.nn as nn
 
 from curupira.models.attention import Head
-from curupira.ops import LayerNorm, RMSNorm, cross_entropy
+from curupira.ops import LayerNorm, RMSNorm, cross_entropy, swish
 from curupira.sampling import sample_next
 
 PositionKind = Literal["learned", "rope"]
 NormKind = Literal["layernorm", "rmsnorm"]
+MlpKind = Literal["relu", "swiglu"]
 
 
 def make_norm(kind: NormKind, dim: int) -> nn.Module:
@@ -62,17 +64,58 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+def swiglu_hidden(n_embd: int) -> int:
+    """Hidden width that gives SwiGLU about the same parameters as the ReLU MLP.
+
+    ReLU MLP: two matrices of C x 4C = 8C^2 weights. SwiGLU: three matrices of
+    C x h = 3Ch. They match when h = 8C/3; rounded up to a multiple of 8.
+    """
+    return 8 * math.ceil(8 * n_embd / 3 / 8)
+
+
+class SwiGLU(nn.Module):
+    """Gated MLP: one projection decides, per token and per unit, how much of the other passes.
+
+    ReLU applies the same fixed cut (negative -> 0) to every unit. Here the cut
+    itself is computed from the token: gate = swish(W_gate x) scales, unit by
+    unit, the candidate values W_up x. No biases, as in the modern models.
+    """
+
+    def __init__(self, n_embd: int) -> None:
+        super().__init__()
+        hidden = swiglu_hidden(n_embd)  # h
+        self.gate = nn.Linear(n_embd, hidden, bias=False)  # (C,) -> (h,) "how much lets through"
+        self.up = nn.Linear(n_embd, hidden, bias=False)    # (C,) -> (h,) "what could go through"
+        self.down = nn.Linear(hidden, n_embd, bias=False)  # (h,) -> (C,) back to the residual width
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C)
+        gate = swish(self.gate(x))  # (B, T, C) -> (B, T, h), smooth, computed from this very token
+        candidates = self.up(x)     # (B, T, C) -> (B, T, h)
+        return self.down(gate * candidates)  # (B, T, h) * (B, T, h) elementwise -> (B, T, C)
+
+
+def make_mlp(kind: MlpKind, n_embd: int) -> nn.Module:
+    return SwiGLU(n_embd) if kind == "swiglu" else FeedForward(n_embd)
+
+
 class Block(nn.Module):
     """Attention (talk to the past) then MLP (think), each around a residual."""
 
     def __init__(
-        self, n_embd: int, n_head: int, block_size: int, rope: bool = False, norm: NormKind = "layernorm"
+        self,
+        n_embd: int,
+        n_head: int,
+        block_size: int,
+        rope: bool = False,
+        norm: NormKind = "layernorm",
+        mlp: MlpKind = "relu",
     ) -> None:
         super().__init__()
         self.ln1 = make_norm(norm, n_embd)
         self.attn = MultiHeadAttention(n_embd, n_head, block_size, rope)
         self.ln2 = make_norm(norm, n_embd)
-        self.ffwd = FeedForward(n_embd)
+        self.ffwd = make_mlp(mlp, n_embd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, C). "Pre-norm": normalize on the way INTO each sub-layer and
@@ -90,6 +133,7 @@ class GPT(nn.Module):
     queries and keys by their position instead (phase 7b).
     norm="layernorm" (phase 4) or "rmsnorm" (phase 7c), used everywhere a
     normalization appears: twice per block and once before the output.
+    mlp="relu" (phase 4) or "swiglu" (phase 7d), the MLP inside every block.
     """
 
     position_embedding: nn.Embedding | None
@@ -103,15 +147,19 @@ class GPT(nn.Module):
         block_size: int,
         position: PositionKind = "learned",
         norm: NormKind = "layernorm",
+        mlp: MlpKind = "relu",
     ) -> None:
         super().__init__()
         self.block_size = block_size
         self.position = position
         self.norm = norm
+        self.mlp = mlp
         self.token_embedding = nn.Embedding(vocab_size, n_embd)  # (V, C)
         self.position_embedding = nn.Embedding(block_size, n_embd) if position == "learned" else None  # (T, C)
         rope = position == "rope"
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, rope, norm) for _ in range(n_layer)])
+        self.blocks = nn.Sequential(
+            *[Block(n_embd, n_head, block_size, rope, norm, mlp) for _ in range(n_layer)]
+        )
         self.ln_f = make_norm(norm, n_embd)           # final normalization
         self.lm_head = nn.Linear(n_embd, vocab_size)  # (C,) -> (V,)
 

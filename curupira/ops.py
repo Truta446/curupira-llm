@@ -49,6 +49,17 @@ class LayerNorm(nn.Module):
         return self.gamma * normalized + self.beta             # (..., C)
 
 
+def swish(x: torch.Tensor) -> torch.Tensor:
+    """Swish (also called SiLU): x * sigmoid(x).
+
+    Like ReLU for large |x| (about x when positive, about 0 when very negative),
+    but smooth around zero and slightly negative for small negative inputs, so
+    the gradient never becomes exactly zero the way it does for ReLU.
+    """
+    # x: (...) -> (...), elementwise
+    return x * torch.sigmoid(x)
+
+
 class RMSNorm(nn.Module):
     """Rescale each token's vector to root-mean-square 1, without centering it.
 

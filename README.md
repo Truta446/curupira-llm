@@ -71,6 +71,7 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | Mesmo modelo e treino, tokenizer BPE de 1024 tokens | 1.071.360 | — | 1,306 por caractere ¹ |
 | **BPE + RoPE no lugar da posição aprendida** | 1.054.976 | — | **1,246** por caractere ¹ |
 | BPE + RoPE + RMSNorm no lugar do LayerNorm | 1.053.824 | — | 1,248 por caractere ¹ (empate) |
+| BPE + RoPE + RMSNorm + SwiGLU no lugar da MLP com ReLU | 1.055.360 | — | 1,245 por caractere ¹ (empate) |
 
 ¹ Média de 2 sementes aleatórias.
 
@@ -363,6 +364,58 @@ Mesma medição da 7b, agora com RoPE nas duas versões:
 
 A lição: **nem todo upgrade melhora a loss**. Alguns trocam custo por qualidade igual, e só uma medição com mais de uma semente mostra a diferença entre "não ajudou" e "atrapalhou".
 
+### Upgrade 7d: SwiGLU, na frente no começo e empate no fim
+
+Dentro de cada bloco, depois de a atenção **buscar** informação, a MLP **pensa** sobre ela. Desde a fase 4 essa MLP usa **ReLU**: expande o vetor, corta tudo que é negativo em zero e comprime de volta. O corte é **fixo**, igual para todo token.
+
+A **SwiGLU** calcula, a partir do próprio token, **duas** projeções: uma com os candidatos e outra que funciona como um **portão**, dizendo quanto de cada candidato passa. O portão usa *swish* (`x · sigmoid(x)`), uma curva suave que, ao contrário da ReLU, nunca tem inclinação exatamente zero.
+
+```
+portão, antes do swish  : [-3.00, 0.00, 1.00, 3.00]
+swish(portão)           : [-0.14, 0.00, 0.73, 2.86]
+candidatos              : [ 2.00, 2.00, 2.00, 2.00]
+portão x candidatos     : [-0.28, 0.00, 1.46, 5.72]   <- bloqueado, atenuado ou amplificado
+```
+
+**Briga justa.** A SwiGLU tem três matrizes em vez de duas. Com a mesma largura interna (512), teria 50% mais parâmetros, e qualquer ganho poderia ser só "modelo maior". Por isso a largura interna é **344** (8C/3), e o modelo inteiro fica com só +0,15% de parâmetros.
+
+**Uma hipótese que a medição derrubou.** Como a inclinação da ReLU é zero para qualquer negativo, um neurônio que só recebe negativos para de aprender e "morre". Contei no modelo da 7c: **0 de 2048** neurônios ficaram em zero nos 65 mil tokens de validação. Neste modelo pequeno, esse problema da ReLU simplesmente não aconteceu.
+
+Mesma medição de sempre, agora com RoPE + RMSNorm nas duas versões:
+
+| MLP | Semente 1337 | Semente 2024 | **Média (loss por caractere)** | Treino → validação |
+|---|---:|---:|---:|---:|
+| ReLU | 1,2427 | 1,2540 | 1,2484 | 0,168 |
+| SwiGLU | 1,2466 | 1,2442 | **1,2454 (-0,2%)** | 0,188 |
+
+**Veredito no fim: acaso.** A SwiGLU perdeu numa semente e ganhou na outra.
+
+**Mas o fim não conta a história toda.** Olhando a validação ao longo do treino:
+
+| Passo | ReLU, 1337 | SwiGLU, 1337 | ReLU, 2024 | SwiGLU, 2024 |
+|---:|---:|---:|---:|---:|
+| 1000 | 1,3509 | **1,3256** | 1,3597 | **1,3292** |
+| 2000 | 1,2714 | **1,2627** | 1,2834 | **1,2723** |
+| 3000 | 1,2511 | **1,2466** | **1,2552** | 1,2571 |
+| 4000 | **1,2427** | 1,2519 | 1,2617 | **1,2442** |
+
+Nos passos 1000 e 2000, a SwiGLU estava à frente **nas duas sementes**. No passo 1000, por uma folga (0,025 a 0,031) bem maior que a variação entre sementes (até 0,009); no passo 2000, a folga (0,009 a 0,011) já era do tamanho dessa variação. Ela **aprende mais rápido** no começo. Só que, com 3 MB de texto, aprender mais rápido também é **decorar mais cedo**: na semente 1337, a validação dela voltou a subir depois do passo 3000, e a distância entre treino e validação ficou maior (0,188 contra 0,168). Uma hipótese, **não testada aqui**: com mais texto, essa vantagem do começo teria espaço para se manter.
+
+A lição: **o momento em que você mede muda a conclusão**. Com poucos dados, quem aprende mais rápido bate antes no teto.
+
+<details>
+<summary><b>Texto gerado com SwiGLU</b> (temperature 1,0, sem top-k)</summary>
+
+```
+Capitu olhou para mim e rigor que, de lhe escuro, tal é vare de outro tempo, a quem sabe que
+sabeis. Tinha ás significações. Não terá algum poeto que me dar ao sacristão, e pelo proprio
+Paula deixou-se acabado, já a traição dexavala do ministro
+```
+
+89,6% de palavras reais e 75,1% distintas, contra 89,1% e 76,5% com ReLU: empate aqui também.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -373,7 +426,7 @@ A lição: **nem todo upgrade melhora a loss**. Alguns trocam custo por qualidad
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
 | 6 | Geração: temperature e top-k | ✅ |
-| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, **RMSNorm ✅**, SwiGLU, KV-cache | 🚧 |
+| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, **RMSNorm ✅**, **SwiGLU ✅**, KV-cache | 🚧 |
 
 ## Começando
 
@@ -391,6 +444,7 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase7a_bpe           # tokenizer BPE + treino comparado (~1 min em GPU)
 .venv/bin/python -m scripts.phase7b_rope          # RoPE vs posição aprendida, 2 sementes (~5 min em GPU)
 .venv/bin/python -m scripts.phase7c_rmsnorm       # RMSNorm vs LayerNorm, 2 sementes (~5 min em GPU)
+.venv/bin/python -m scripts.phase7d_swiglu        # SwiGLU vs ReLU, 2 sementes (~5 min em GPU)
 
 # brinque com o modelo treinado
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
@@ -406,6 +460,7 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 | `phase7a_bpe` (4000 passos) | ~80 min (custo por passo +5% vs. letras) | 1 min |
 | `phase7b_rope` (4 treinos de 4000 passos) | não medido ² | 5 min (cada treino com RoPE ~25% mais lento) |
 | `phase7c_rmsnorm` (4 treinos de 4000 passos) | não medido ³ | 5 min (cada treino com RMSNorm ~8% mais rápido) |
+| `phase7d_swiglu` (4 treinos de 4000 passos) | não medido ³ | 5,5 min (ReLU e SwiGLU com tempos equivalentes: 77–81 s e 77–86 s por treino) |
 
 ² A máquina estava ocupada por outros processos durante a medição (load average 27 em 24 núcleos) e os tempos variaram mais de 10× entre rodadas; preferi não publicar um número não confiável. Em CPU, `--seeds 1337 --steps 1000` reduz a fase a 2 treinos curtos.
 
@@ -420,7 +475,7 @@ curupira/            a biblioteca
   tokenizer.py       Tokenizer (Protocol) e CharTokenizer: cada caractere vira um inteiro
   bpe.py             BPETokenizer: merges de pares frequentes, escrito à mão
   dataset.py         load_texts, encode_splits, get_batch (x: (B,T), y: (B,T)), pick_device
-  ops.py             cross_entropy, LayerNorm, RMSNorm, RoPE e os otimizadores SGD e AdamW, à mão
+  ops.py             cross_entropy, LayerNorm, RMSNorm, RoPE, swish e os otimizadores SGD e AdamW, à mão
   ablation.py        compara variantes com as mesmas sementes: placar e veredito contra o acaso
   training.py        estimate_loss, agendamento da taxa, TrainConfig e train_model
   checkpoint.py      ModelConfig, save_checkpoint e load_checkpoint
@@ -430,9 +485,9 @@ curupira/            a biblioteca
   models/
     bigram.py        BigramLM: uma tabela (V, V)
     attention.py     Head: uma cabeça causal + AttentionLM
-    transformer.py   MultiHeadAttention, FeedForward, Block e GPT (upgrades ligados por argumento)
+    transformer.py   MultiHeadAttention, FeedForward, SwiGLU, Block e GPT (upgrades ligados por argumento)
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py  phase7b_rope.py  phase7c_rmsnorm.py
+  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py … phase7d_swiglu.py
   generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)

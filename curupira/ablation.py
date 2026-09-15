@@ -18,7 +18,7 @@ import torch
 from curupira.bpe import BPETokenizer, load_or_train
 from curupira.checkpoint import ModelConfig, load_checkpoint, save_checkpoint
 from curupira.dataset import DATA_DIR, encode_splits, load_texts
-from curupira.models.transformer import NormKind, PositionKind
+from curupira.models.transformer import MlpKind, NormKind, PositionKind
 from curupira.text_stats import WordStats, corpus_vocabulary, word_stats
 from curupira.training import LossPoint, TrainConfig, train_model
 
@@ -64,9 +64,11 @@ def load_bpe_data(vocab_size: int = BPE_VOCAB_SIZE) -> BPEData:
 BPE_BASE_CONFIG: Final = ModelConfig(vocab_size=BPE_VOCAB_SIZE, n_embd=128, n_head=4, n_layer=4, block_size=128)
 
 
-def bpe_config(position: PositionKind = "learned", norm: NormKind = "layernorm") -> ModelConfig:
+def bpe_config(
+    position: PositionKind = "learned", norm: NormKind = "layernorm", mlp: MlpKind = "relu"
+) -> ModelConfig:
     """The phase 5 architecture on BPE tokens, with the phase 7 upgrades chosen explicitly."""
-    return replace(BPE_BASE_CONFIG, position=position, norm=norm)
+    return replace(BPE_BASE_CONFIG, position=position, norm=norm, mlp=mlp)
 
 
 def train_variant(variant: Variant, seed: int, data: BPEData, steps: int, device: str,
