@@ -43,10 +43,13 @@ Fases:
 - Usar o virtualenv do projeto: `.venv/bin/python` (Python 3.12, torch com CUDA, numpy, matplotlib já instalados).
 - Hardware do usuário: Intel Core Ultra 9 275HX (24 threads), 30 GB de RAM, RTX 5060 Laptop (8 GB). O disco está ~96% cheio: manter checkpoints pequenos e poucos.
 - Velocidade medida do GPT de 4 blocos (C=128, B=32, T=128, ~838k parâmetros): ~1,1 s/passo em CPU e ~15 ms/passo em GPU. Para validar treinos longos, rodar com `--device cuda`, mas documentar sempre o tempo em CPU no README.
+- **Medir tempo**: antes de medir tempo em CPU, conferir a carga com `uptime`/`ps` (o usuário roda outros trabalhos pesados na máquina) e intercalar as variantes comparadas; se a carga estiver alta ou as rodadas variarem muito, não publicar o número — dizer que não foi medido. O tempo de RoPE em CPU (fase 7b) ficou pendente por isso.
 - Scripts que escrevem em `assets/` têm `--no-plot`; ao medir tempo ou testar, usar `--no-plot` e fazer backup de `checkpoints/` antes (a fase 5 sobrescreve `best.pt`, que a fase 6 usa).
 - Resultados até a fase 5 (loss de validação): bigram 2,367 → uma cabeça 2,323 → 4 blocos com SGD 1,887 → 4 blocos com AdamW + warmup/cosine, 4000 passos, **1,4515** (`checkpoints/best.pt`; snapshots `step01000.pt` … `step04000.pt`).
 - Fase 6 (só inferência, ~3 min em CPU): configuração padrão de geração temperature 0,8 + top-k 20 (73% de palavras reais, 76% distintas; Machado real: 98% / 61%). `scripts/generate.py` gera a partir de qualquer checkpoint.
 - Fase 7a (BPE, vocabulário 1024, merges em cache em `data/bpe_2048.json`, 2,65 caracteres/token na validação): mesmo modelo e receita da fase 5 → val 3,4727 por token = **1,3086 por caractere** (-9,8% vs. letras), `checkpoints/bpe1024_best.pt`. Distância treino→val por caractere dobrou (0,039 → 0,075): ~18 épocas sobre 920k tokens. Geração, 8×400 caracteres: BPE T 1,0 = 78,1% reais / 76,6% distintas (letras: 59,7% / 80,4%). **Linha de base para 7b–7d: 1,3086 por caractere com BPE 1024.**
+- Fase 7b (RoPE, `GPT(position="rope")`, 2 sementes 1337/2024, ~5 min em GPU): posição aprendida 1,3086/1,3030 (média 1,3058) vs. RoPE 1,2388/1,2529 (média **1,2458**, -4,6%), variação entre sementes 0,014; treino→val por caractere 0,074 → 0,167 e val da semente 2024 subiu no fim (1,2529 → 1,2633): começa a decorar. ~25% mais lento por passo em GPU. `checkpoints/bpe1024_rope_best.pt`. **Linha de base para 7c–7d: RoPE, média 1,2458 por caractere.**
+- Método de ablação da fase 7: cada upgrade vira um argumento do `GPT`/`ModelConfig` com padrão igual ao modelo anterior (checkpoints antigos continuam carregando), e cada comparação treina as variantes com **as mesmas sementes** (padrão 1337 e 2024) e compara a diferença média com a variação entre sementes.
 
 ## Dados
 

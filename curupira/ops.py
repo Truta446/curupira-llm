@@ -49,6 +49,33 @@ class LayerNorm(nn.Module):
         return self.gamma * normalized + self.beta             # (..., C)
 
 
+def rope_tables(head_size: int, max_len: int, base: float = 10000.0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cosines and sines of the rotation angle for every (position, channel pair).
+
+    RoPE splits a head's H channels into H/2 pairs and treats each pair as a
+    point on a plane. At position p, pair i is rotated by the angle p * theta_i.
+    theta_i goes from 1 (pair 0, spins fast) down to ~1/base (last pair, spins
+    slowly), like the hands of a clock: fast pairs tell nearby positions apart,
+    slow pairs still distinguish positions that are far apart.
+    """
+    assert head_size % 2 == 0, "RoPE needs an even head size: channels are rotated in pairs"
+    theta = base ** (-torch.arange(0, head_size, 2, dtype=torch.float32) / head_size)  # (H/2,)
+    positions = torch.arange(max_len, dtype=torch.float32)  # (T,)
+    angles = torch.outer(positions, theta)  # (T,) x (H/2,) -> (T, H/2)
+    return angles.cos(), angles.sin()  # (T, H/2), (T, H/2)
+
+
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate each channel pair of x by its position's angle (a 2-D rotation per pair)."""
+    # x: (..., T, H); cos, sin: (T, H/2), already cropped to the T positions of x
+    x1 = x[..., 0::2]  # (..., T, H/2) first coordinate of every pair
+    x2 = x[..., 1::2]  # (..., T, H/2) second coordinate
+    rotated1 = x1 * cos - x2 * sin  # (..., T, H/2)
+    rotated2 = x1 * sin + x2 * cos  # (..., T, H/2)
+    # Interleave back so every pair returns to its original channels.
+    return torch.stack((rotated1, rotated2), dim=-1).flatten(-2)  # (..., T, H/2, 2) -> (..., T, H)
+
+
 class AdamW:
     """Adam with decoupled weight decay, written by hand.
 

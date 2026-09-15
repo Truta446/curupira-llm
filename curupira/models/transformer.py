@@ -5,7 +5,12 @@ Each piece answers one limitation of the single head from phase 3:
     MLP         -> time to *think* about what was gathered, position by position
     residual    -> a highway that lets gradients reach the early layers
     LayerNorm   -> keeps the numbers in a sane range, so deep stacks train
+
+Phase 7 upgrades are switched on through GPT's keyword arguments, one at a
+time, so every variant is the same code with a single piece swapped.
 """
+
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -14,15 +19,17 @@ from curupira.models.attention import Head
 from curupira.ops import LayerNorm, cross_entropy
 from curupira.sampling import sample_next
 
+PositionKind = Literal["learned", "rope"]
+
 
 class MultiHeadAttention(nn.Module):
     """`n_head` heads running in parallel, their outputs concatenated."""
 
-    def __init__(self, n_embd: int, n_head: int, block_size: int) -> None:
+    def __init__(self, n_embd: int, n_head: int, block_size: int, rope: bool = False) -> None:
         super().__init__()
         assert n_embd % n_head == 0, "n_embd must divide evenly among the heads"
         head_size = n_embd // n_head  # H: each head gets a slice of the channels
-        self.heads = nn.ModuleList([Head(n_embd, head_size, block_size) for _ in range(n_head)])
+        self.heads = nn.ModuleList([Head(n_embd, head_size, block_size, rope) for _ in range(n_head)])
         self.proj = nn.Linear(n_embd, n_embd)  # mixes what the heads found
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -53,10 +60,10 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """Attention (talk to the past) then MLP (think), each around a residual."""
 
-    def __init__(self, n_embd: int, n_head: int, block_size: int) -> None:
+    def __init__(self, n_embd: int, n_head: int, block_size: int, rope: bool = False) -> None:
         super().__init__()
         self.ln1 = LayerNorm(n_embd)
-        self.attn = MultiHeadAttention(n_embd, n_head, block_size)
+        self.attn = MultiHeadAttention(n_embd, n_head, block_size, rope)
         self.ln2 = LayerNorm(n_embd)
         self.ffwd = FeedForward(n_embd)
 
@@ -69,14 +76,31 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    """Token + position embeddings -> N blocks -> next-token scores."""
+    """Token embeddings (+ position information) -> N blocks -> next-token scores.
 
-    def __init__(self, vocab_size: int, n_embd: int, n_head: int, n_layer: int, block_size: int) -> None:
+    position="learned": a trainable vector per slot is added to each token (phase 4).
+    position="rope": no position vector at all; every attention head rotates its
+    queries and keys by their position instead (phase 7b).
+    """
+
+    position_embedding: nn.Embedding | None
+
+    def __init__(
+        self,
+        vocab_size: int,
+        n_embd: int,
+        n_head: int,
+        n_layer: int,
+        block_size: int,
+        position: PositionKind = "learned",
+    ) -> None:
         super().__init__()
         self.block_size = block_size
-        self.token_embedding = nn.Embedding(vocab_size, n_embd)     # (V, C)
-        self.position_embedding = nn.Embedding(block_size, n_embd)  # (T, C)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size) for _ in range(n_layer)])
+        self.position = position
+        self.token_embedding = nn.Embedding(vocab_size, n_embd)  # (V, C)
+        self.position_embedding = nn.Embedding(block_size, n_embd) if position == "learned" else None  # (T, C)
+        rope = position == "rope"
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, rope) for _ in range(n_layer)])
         self.ln_f = LayerNorm(n_embd)                # final normalization
         self.lm_head = nn.Linear(n_embd, vocab_size)  # (C,) -> (V,)
 
@@ -85,10 +109,11 @@ class GPT(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # idx: (B, T) token ids
         B, T = idx.shape
-        tok = self.token_embedding(idx)  # (B, T) -> (B, T, C)
-        pos = self.position_embedding(torch.arange(T, device=idx.device))  # (T,) -> (T, C)
+        x = self.token_embedding(idx)  # (B, T) -> (B, T, C)
+        if self.position_embedding is not None:
+            pos = self.position_embedding(torch.arange(T, device=idx.device))  # (T,) -> (T, C)
+            x = x + pos  # (B, T, C) + (T, C) broadcast -> (B, T, C)
 
-        x = tok + pos          # (B, T, C)
         x = self.blocks(x)     # (B, T, C) -> (B, T, C), N blocks in sequence
         x = self.ln_f(x)       # (B, T, C)
         logits = self.lm_head(x)  # (B, T, C) -> (B, T, V)
@@ -106,7 +131,7 @@ class GPT(nn.Module):
     ) -> torch.Tensor:
         # idx: (B, T) starting context
         for _ in range(max_new_tokens):
-            cropped = idx[:, -self.block_size :]  # (B, min(T, block_size)): positions beyond have no embedding
+            cropped = idx[:, -self.block_size :]  # (B, min(T, block_size)): the model was built for block_size slots
             logits, _ = self(cropped)  # (B, T, V)
             last = logits[:, -1, :]  # (B, V) only the last position predicts what comes next
             nxt = sample_next(last, temperature, top_k)  # (B, V) -> (B, 1)

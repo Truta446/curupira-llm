@@ -13,22 +13,31 @@ Intuition for the three projections of a token:
 import torch
 import torch.nn as nn
 
-from curupira.ops import cross_entropy
+from curupira.ops import apply_rope, cross_entropy, rope_tables
 
 
 class Head(nn.Module):
-    """A single attention head."""
+    """A single attention head, optionally with rotary position embeddings (RoPE)."""
 
-    def __init__(self, n_embd: int, head_size: int, block_size: int) -> None:
+    tril: torch.Tensor
+    rope_cos: torch.Tensor
+    rope_sin: torch.Tensor
+
+    def __init__(self, n_embd: int, head_size: int, block_size: int, rope: bool = False) -> None:
         super().__init__()
         self.head_size = head_size
+        self.rope = rope
         self.key = nn.Linear(n_embd, head_size, bias=False)    # (C,) -> (H,)
         self.query = nn.Linear(n_embd, head_size, bias=False)  # (C,) -> (H,)
         self.value = nn.Linear(n_embd, head_size, bias=False)  # (C,) -> (H,)
         # Lower-triangular ones: position t may only read positions <= t.
         # A buffer moves with .to(device) but is not a trainable parameter.
         self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
-        self.tril: torch.Tensor
+        if rope:
+            cos, sin = rope_tables(head_size, block_size)  # (T, H/2) each
+            # Not persistent: the tables are recomputed from the config, never learned.
+            self.register_buffer("rope_cos", cos, persistent=False)
+            self.register_buffer("rope_sin", sin, persistent=False)
 
     def forward(self, x: torch.Tensor, scale: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns (output, attention), the attention matrix included for inspection."""
@@ -38,6 +47,12 @@ class Head(nn.Module):
         q = self.query(x)  # (B, T, C) -> (B, T, H)
         k = self.key(x)    # (B, T, C) -> (B, T, H)
         v = self.value(x)  # (B, T, C) -> (B, T, H)
+
+        if self.rope:
+            # Rotate queries and keys by their position. Values are NOT rotated:
+            # position should decide WHO to look at, not WHAT gets passed along.
+            q = apply_rope(q, self.rope_cos[:T], self.rope_sin[:T])  # (B, T, H)
+            k = apply_rope(k, self.rope_cos[:T], self.rope_sin[:T])  # (B, T, H)
 
         # How much each position wants to read from each other position:
         # dot product of my query with every key.

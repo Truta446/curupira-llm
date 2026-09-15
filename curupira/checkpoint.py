@@ -12,7 +12,7 @@ import torch
 
 from curupira.bpe import BPETokenizer
 from curupira.dataset import ROOT
-from curupira.models.transformer import GPT
+from curupira.models.transformer import GPT, PositionKind
 from curupira.tokenizer import CharTokenizer, Tokenizer
 
 CHECKPOINT_DIR: Final = ROOT / "checkpoints"
@@ -20,16 +20,22 @@ CHECKPOINT_DIR: Final = ROOT / "checkpoints"
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Everything needed to rebuild the same architecture."""
+    """Everything needed to rebuild the same architecture.
+
+    Upgrade fields have defaults matching phases 4-7a, so older checkpoints,
+    which do not store them, rebuild the architecture they were trained with.
+    """
 
     vocab_size: int
     n_embd: int
     n_head: int
     n_layer: int
     block_size: int
+    position: PositionKind = "learned"
 
     def build(self) -> GPT:
-        return GPT(self.vocab_size, self.n_embd, self.n_head, self.n_layer, self.block_size)
+        return GPT(self.vocab_size, self.n_embd, self.n_head, self.n_layer, self.block_size,
+                   position=self.position)
 
 
 @dataclass(frozen=True)

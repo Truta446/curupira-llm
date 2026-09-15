@@ -68,7 +68,10 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | 1 bloco Transformer | 244.340 | 1,856 | 1,898 |
 | 4 blocos Transformer (SGD, 1500 passos) | 838.004 | 1,849 | 1,887 |
 | Mesmo modelo com AdamW, 4000 passos | 838.004 | 1,413 | 1,452 |
-| **Mesmo modelo e treino, tokenizer BPE de 1024 tokens** | 1.071.360 | — | **1,309** por caractere |
+| Mesmo modelo e treino, tokenizer BPE de 1024 tokens | 1.071.360 | — | 1,306 por caractere ¹ |
+| **BPE + RoPE no lugar da posição aprendida** | 1.054.976 | — | **1,246** por caractere ¹ |
+
+¹ Média de 2 sementes aleatórias.
 
 O treino, sozinho, **redescobriu as estatísticas do livro**: chegou ao mesmo número que se obtém contando pares de letras. A tabela aprendida faz sentido — depois de `q` vem `u` com 100%, e depois de uma quebra de linha vem `-` em 48% dos casos, porque os diálogos de Machado começam com `--`.
 
@@ -290,6 +293,49 @@ Frases inteiras com sujeito e verbo, e **Ayres**, o narrador de *Esaú e Jacó* 
 
 </details>
 
+### Upgrade 7b: RoPE, posição por rotação
+
+Desde a fase 3, o modelo sabia **onde** cada token está somando a ele um vetor treinável por posição: um para o slot 0, outro para o slot 1… O problema é que "a palavra logo antes de mim" é a mesma relação no slot 3 e no slot 150, mas com vetores aprendidos o modelo precisa descobrir isso **separadamente para cada posição**.
+
+O **RoPE** (*rotary position embedding*) joga fora esses vetores. Em cada cabeça de atenção, divide a query e a key em pares de números e **gira** cada par por um ângulo proporcional à posição, cada par numa velocidade diferente, como os ponteiros de um relógio. O value não gira: a posição decide **quem** olhar, não **o que** passar adiante.
+
+A propriedade que faz tudo funcionar: depois de girar, o produto `query · key` **só depende da distância** entre as posições.
+
+```
+ query na posição | key na posição | distância |    q · k
+                3 |              1 |         2 |   0.0337
+               50 |             48 |         2 |   0.0337
+              150 |            148 |         2 |   0.0337
+               10 |              5 |         5 |   0.6681
+              120 |            115 |         5 |   0.6681
+```
+
+Conferido contra a rotação feita com números complexos (diferença de 2e-7), e com a propriedade da distância valendo em todas as posições.
+
+**Medição honesta.** Uma única rodada pode ganhar por sorte, então as duas versões foram treinadas com **duas sementes aleatórias**, mesmos dados (BPE 1024) e mesma receita:
+
+| Posição | Semente 1337 | Semente 2024 | **Média (loss por caractere)** | Treino → validação | Parâmetros |
+|---|---:|---:|---:|---:|---:|
+| Aprendida | 1,3086 | 1,3030 | 1,3058 | 0,074 | 1.071.360 |
+| **RoPE** | 1,2388 | 1,2529 | **1,2458 (-4,6%)** | 0,167 | 1.054.976 |
+
+O RoPE venceu nas duas sementes, por uma diferença (0,060) **quatro vezes maior** que a variação entre sementes (0,014), e com 16 mil parâmetros **a menos**.
+
+**O preço:** ele aprende mais rápido, e também decora mais rápido. A distância entre treino e validação mais que dobrou, e na semente 2024 a validação chegou a 1,2529 e **voltou a subir** para 1,2633 no fim do treino. Com 3 MB de texto, o modelo já está no limite do que dá para aprender sem decorar.
+
+<details>
+<summary><b>Texto gerado com RoPE</b> (temperature 1,0, sem top-k)</summary>
+
+```
+Capitu olhou para mim e ri-lhe que, de lhe escuviv talento ja a partes e menina.
+--Digo-lhe que não perde em gatero; são amavam muito.
+--Ora odio ao sacristão, e pelo proprio é a deixar o imperador, já a traição de inesperado...
+```
+
+90,2% de palavras reais e 74,2% distintas, contra 78,1% e 76,6% da posição aprendida.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -300,7 +346,7 @@ Frases inteiras com sujeito e verbo, e **Ayres**, o narrador de *Esaú e Jacó* 
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
 | 6 | Geração: temperature e top-k | ✅ |
-| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, RoPE, RMSNorm, SwiGLU, KV-cache | 🚧 |
+| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, RMSNorm, SwiGLU, KV-cache | 🚧 |
 
 ## Começando
 
@@ -316,6 +362,7 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase5                # treino de verdade + checkpoints (~1 min em GPU)
 .venv/bin/python -m scripts.phase6 --device cpu   # temperature, top-k e 3 checkpoints (~3 min)
 .venv/bin/python -m scripts.phase7a_bpe           # tokenizer BPE + treino comparado (~1 min em GPU)
+.venv/bin/python -m scripts.phase7b_rope          # RoPE vs posição aprendida, 2 sementes (~5 min em GPU)
 
 # brinque com o modelo treinado
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
@@ -329,6 +376,9 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 | `phase5` (4000 passos) | ~80 min (~1,1 s/passo) | 1 min |
 | `phase6` (só geração, sem treino) | 3 min | — |
 | `phase7a_bpe` (4000 passos) | ~80 min (custo por passo +5% vs. letras) | 1 min |
+| `phase7b_rope` (4 treinos de 4000 passos) | não medido ² | 5 min (cada treino com RoPE ~25% mais lento) |
+
+² A máquina estava ocupada por outros processos durante a medição (load average 27 em 24 núcleos) e os tempos variaram mais de 10× entre rodadas; preferi não publicar um número não confiável. Em CPU, `--seeds 1337 --steps 1000` reduz a fase a 2 treinos curtos.
 
 Tudo roda em CPU; só demora. Para experimentar a fase 5 em CPU, `--steps 1000 --warmup 100` leva ~20 min.
 
@@ -339,7 +389,7 @@ curupira/            a biblioteca
   tokenizer.py       Tokenizer (Protocol) e CharTokenizer: cada caractere vira um inteiro
   bpe.py             BPETokenizer: merges de pares frequentes, escrito à mão
   dataset.py         load_texts, encode_splits, get_batch (x: (B,T), y: (B,T)), pick_device
-  ops.py             cross_entropy, LayerNorm e os otimizadores SGD e AdamW, à mão
+  ops.py             cross_entropy, LayerNorm, RoPE e os otimizadores SGD e AdamW, à mão
   training.py        estimate_loss, agendamento da taxa, TrainConfig e train_model
   checkpoint.py      ModelConfig, save_checkpoint e load_checkpoint
   sampling.py        temperature, top-k, greedy e o sorteio da próxima letra
@@ -348,9 +398,9 @@ curupira/            a biblioteca
   models/
     bigram.py        BigramLM: uma tabela (V, V)
     attention.py     Head: uma cabeça causal + AttentionLM
-    transformer.py   MultiHeadAttention, FeedForward, Block e GPT
+    transformer.py   MultiHeadAttention, FeedForward, Block e GPT (upgrades ligados por argumento)
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py
+  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py  phase7b_rope.py
   generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)

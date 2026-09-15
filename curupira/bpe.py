@@ -20,6 +20,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import Any, Final, Self
 
 import torch
@@ -173,3 +174,14 @@ class BPETokenizer:
     def load(cls, path: str | os.PathLike[str]) -> Self:
         with open(path, encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
+
+
+def load_or_train(cache: Path, text: str, vocab_size: int, alphabet: Iterable[str] = ()) -> BPETokenizer:
+    """Reuse the merges cached at `cache` when they reach `vocab_size`; otherwise learn and cache them."""
+    if cache.exists():
+        cached = BPETokenizer.load(cache)
+        if cached.vocab_size >= vocab_size:
+            return cached.truncated(vocab_size)
+    learned = BPETokenizer.train(text, vocab_size, alphabet=alphabet)
+    learned.save(cache)
+    return learned
