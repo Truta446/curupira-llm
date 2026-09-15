@@ -416,6 +416,39 @@ Paula deixou-se acabado, já a traição dexavala do ministro
 
 </details>
 
+### Upgrade 7e: KV-cache, o mesmo texto sem refazer contas
+
+Este upgrade não mexe no treino, só na **geração**. Para escrever o token *n*, a geração normal passa **de novo** os *n* tokens pelo modelo inteiro. Mas as keys e values de um token dependem só dele e do que veio **antes**, nunca do que vem depois (o Curupira de novo). Uma vez calculadas, nunca mudam. O **KV-cache** guarda essas keys e values e, a cada passo, calcula só as do token novo.
+
+| Tokens gerados | Posições processadas, sem cache | Com cache |
+|---:|---:|---:|
+| 16 | 136 | 16 |
+| 128 | 8.256 | 128 |
+| 1000 | 500.500 | 1.000 |
+
+**Efeito na loss: zero, por construção.** Conferido em dois modelos treinados (o moderno da 7d, com RoPE, e o de letras da fase 5, com posição aprendida):
+
+| Modelo | Loss sem cache | Loss com cache | Maior diferença nos logits | Texto gerado |
+|---|---:|---:|---:|---|
+| 7d (BPE, RoPE, RMSNorm, SwiGLU) | 2,985283 | 2,985283 | 9e-6 | idêntico (greedy e sorteado) |
+| Fase 5 (letras) | 1,313808 | 1,313808 | 2e-5 | idêntico (greedy e sorteado) |
+
+**Velocidade: uma medição que contrariou a expectativa.** Na GPU, com as rodadas variando só 1–3%:
+
+| Tokens gerados | Sem cache | Com cache | Ganho |
+|---:|---:|---:|---:|
+| 119 (modelo treinado) | 283 tokens/s | 283 tokens/s | 1,0× |
+| 256 | 308 tokens/s | 318 tokens/s | 1,0× |
+| 1000 | 298 tokens/s | 307 tokens/s | 1,0× |
+
+**Nenhum ganho.** O cache economiza **contas**, e num modelo de 1 milhão de parâmetros as contas são a parte barata para a GPU. O tempo vai em **disparar operações pequenas**: nosso código roda 16 cabeças separadas em loop no Python, o que dá centenas de pequenas operações por token, com ou sem cache. O KV-cache faz diferença quando as contas dominam: modelos grandes, contextos longos ou CPU.
+
+**Em CPU, a medição ficou inválida.** A máquina estava ocupada por outros processos durante o teste (inclusive uma máquina virtual), e rodadas da mesma medição variaram até 133×. Preferi não publicar esses números.
+
+**O custo é memória.** Com 128 tokens, o cache medido ocupa **512 KiB** (2 × 4 blocos × 4 cabeças × 32 números × 128 tokens × 4 bytes), contra 4 MiB de pesos. A mesma conta para um modelo grande (32 blocos, 32 cabeças de 128 números, 4096 tokens, 2 bytes por número) dá **2 GiB por conversa**: é por isso que servir LLMs custa tanta memória.
+
+**Limitação:** o cache só funciona enquanto o texto cabe na janela (128 tokens). Depois disso, a geração normal desliza a janela, todas as posições mudam e não há o que reaproveitar.
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -426,7 +459,7 @@ Paula deixou-se acabado, já a traição dexavala do ministro
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
 | 6 | Geração: temperature e top-k | ✅ |
-| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, **RMSNorm ✅**, **SwiGLU ✅**, KV-cache | 🚧 |
+| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, **RMSNorm ✅**, **SwiGLU ✅**, **KV-cache ✅** | ✅ |
 
 ## Começando
 
@@ -445,6 +478,7 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase7b_rope          # RoPE vs posição aprendida, 2 sementes (~5 min em GPU)
 .venv/bin/python -m scripts.phase7c_rmsnorm       # RMSNorm vs LayerNorm, 2 sementes (~5 min em GPU)
 .venv/bin/python -m scripts.phase7d_swiglu        # SwiGLU vs ReLU, 2 sementes (~5 min em GPU)
+.venv/bin/python -m scripts.phase7e_kvcache       # KV-cache: exatidão, velocidade e memória
 
 # brinque com o modelo treinado
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
@@ -461,6 +495,7 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 | `phase7b_rope` (4 treinos de 4000 passos) | não medido ² | 5 min (cada treino com RoPE ~25% mais lento) |
 | `phase7c_rmsnorm` (4 treinos de 4000 passos) | não medido ³ | 5 min (cada treino com RMSNorm ~8% mais rápido) |
 | `phase7d_swiglu` (4 treinos de 4000 passos) | não medido ³ | 5,5 min (ReLU e SwiGLU com tempos equivalentes: 77–81 s e 77–86 s por treino) |
+| `phase7e_kvcache` (sem treino) | ~10 min no total, a maior parte gerando 1000 tokens sem cache em CPU | segundos (`--timing-devices cuda` pula a CPU) |
 
 ² A máquina estava ocupada por outros processos durante a medição (load average 27 em 24 núcleos) e os tempos variaram mais de 10× entre rodadas; preferi não publicar um número não confiável. Em CPU, `--seeds 1337 --steps 1000` reduz a fase a 2 treinos curtos.
 
@@ -484,10 +519,10 @@ curupira/            a biblioteca
   plots.py           gráficos em versão clara e escura
   models/
     bigram.py        BigramLM: uma tabela (V, V)
-    attention.py     Head: uma cabeça causal + AttentionLM
+    attention.py     Head: uma cabeça causal (com caminho para KV-cache) + AttentionLM
     transformer.py   MultiHeadAttention, FeedForward, SwiGLU, Block e GPT (upgrades ligados por argumento)
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py … phase7d_swiglu.py
+  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py … phase7e_kvcache.py
   generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)

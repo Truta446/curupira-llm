@@ -16,13 +16,16 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from curupira.models.attention import Head
+from curupira.models.attention import Head, KVCache
 from curupira.ops import LayerNorm, RMSNorm, cross_entropy, swish
 from curupira.sampling import sample_next
 
 PositionKind = Literal["learned", "rope"]
 NormKind = Literal["layernorm", "rmsnorm"]
 MlpKind = Literal["relu", "swiglu"]
+
+LayerCache = list[KVCache]   # one (keys, values) pair per head
+ModelCache = list[LayerCache]  # one LayerCache per block
 
 
 def make_norm(kind: NormKind, dim: int) -> nn.Module:
@@ -44,6 +47,17 @@ class MultiHeadAttention(nn.Module):
         outs = [head(x)[0] for head in self.heads]  # n_head tensors of (B, T, H)
         out = torch.cat(outs, dim=-1)  # (B, T, H * n_head) = (B, T, C)
         return self.proj(out)  # (B, T, C) -> (B, T, C)
+
+    def forward_cached(self, x: torch.Tensor, past: LayerCache | None) -> tuple[torch.Tensor, LayerCache]:
+        # x: (B, T_new, C)
+        outs: list[torch.Tensor] = []
+        cache: LayerCache = []
+        for i, head in enumerate(self.heads):
+            assert isinstance(head, Head)
+            out, head_cache = head.forward_cached(x, None if past is None else past[i])  # (B, T_new, H)
+            outs.append(out)
+            cache.append(head_cache)
+        return self.proj(torch.cat(outs, dim=-1)), cache  # (B, T_new, C)
 
 
 class FeedForward(nn.Module):
@@ -124,6 +138,14 @@ class Block(nn.Module):
         x = x + self.ffwd(self.ln2(x))  # (B, T, C) + (B, T, C) -> (B, T, C)
         return x
 
+    def forward_cached(self, x: torch.Tensor, past: LayerCache | None) -> tuple[torch.Tensor, LayerCache]:
+        # x: (B, T_new, C). Only attention looks at other positions, so only it needs the cache;
+        # the norms and the MLP work token by token anyway.
+        attended, cache = self.attn.forward_cached(self.ln1(x), past)  # (B, T_new, C)
+        x = x + attended                # (B, T_new, C)
+        x = x + self.ffwd(self.ln2(x))  # (B, T_new, C)
+        return x, cache
+
 
 class GPT(nn.Module):
     """Token embeddings (+ position information) -> N blocks -> next-token scores.
@@ -179,6 +201,48 @@ class GPT(nn.Module):
 
         loss = None if targets is None else cross_entropy(logits, targets)  # scalar
         return logits, loss
+
+    def forward_cached(self, idx: torch.Tensor, past: ModelCache | None) -> tuple[torch.Tensor, ModelCache]:
+        """Next-token scores for the NEW tokens only, extending the KV cache of every block."""
+        # idx: (B, T_new) token ids not seen yet
+        B, T_new = idx.shape
+        start = 0 if past is None else past[0][0][0].shape[1]  # how many tokens the cache already holds
+        x = self.token_embedding(idx)  # (B, T_new) -> (B, T_new, C)
+        if self.position_embedding is not None:
+            positions = torch.arange(start, start + T_new, device=idx.device)  # (T_new,)
+            x = x + self.position_embedding(positions)  # (B, T_new, C) + (T_new, C)
+
+        cache: ModelCache = []
+        for i, block in enumerate(self.blocks):
+            assert isinstance(block, Block)
+            x, layer_cache = block.forward_cached(x, None if past is None else past[i])  # (B, T_new, C)
+            cache.append(layer_cache)
+        logits = self.lm_head(self.ln_f(x))  # (B, T_new, C) -> (B, T_new, V)
+        return logits, cache
+
+    @torch.no_grad()
+    def generate_cached(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+    ) -> torch.Tensor:
+        """Same result as `generate`, computing each token's keys and values only once.
+
+        Limited to block_size tokens in total: past that, `generate` slides its
+        window and every position changes, so there is nothing left to reuse.
+        """
+        # idx: (B, T) starting context
+        if idx.shape[1] + max_new_tokens > self.block_size:
+            raise ValueError(f"prompt + new tokens = {idx.shape[1] + max_new_tokens} > block_size {self.block_size}")
+        logits, cache = self.forward_cached(idx, None)  # "prefill": the whole prompt in one pass
+        for step in range(max_new_tokens):
+            nxt = sample_next(logits[:, -1, :], temperature, top_k)  # (B, V) -> (B, 1)
+            idx = torch.cat([idx, nxt], dim=1)  # (B, T) -> (B, T+1)
+            if step < max_new_tokens - 1:
+                logits, cache = self.forward_cached(nxt, cache)  # only the token just chosen: (B, 1, V)
+        return idx
 
     @torch.no_grad()
     def generate(

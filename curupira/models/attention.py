@@ -15,6 +15,9 @@ import torch.nn as nn
 
 from curupira.ops import apply_rope, cross_entropy, rope_tables
 
+KVCache = tuple[torch.Tensor, torch.Tensor]
+"""Keys and values already computed for the past tokens of one head: (B, T_past, H) each."""
+
 
 class Head(nn.Module):
     """A single attention head, optionally with rotary position embeddings (RoPE)."""
@@ -39,8 +42,29 @@ class Head(nn.Module):
             self.register_buffer("rope_cos", cos, persistent=False)
             self.register_buffer("rope_sin", sin, persistent=False)
 
+    def _attend(
+        self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor, scale: bool
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The attention itself, shared by the full and the cached paths."""
+        # q: (B, T_q, H); k, v: (B, T_k, H); mask: (T_q, T_k), 1 where reading is allowed
+        # How much each query position wants to read from each key position.
+        scores = q @ k.transpose(-2, -1)  # (B, T_q, H) @ (B, H, T_k) -> (B, T_q, T_k)
+
+        # Divide by sqrt(head_size): the dot product of H random numbers grows
+        # like sqrt(H), and without this the softmax saturates into a hard
+        # argmax, killing the gradient. See phase3.py section 2.
+        if scale:
+            scores = scores * self.head_size**-0.5  # (B, T_q, T_k)
+
+        # Causal mask: -inf where reading is not allowed, so softmax gives it probability 0.
+        scores = scores.masked_fill(mask == 0, float("-inf"))  # (B, T_q, T_k)
+
+        attention = torch.softmax(scores, dim=-1)  # (B, T_q, T_k), each row sums to 1
+        out = attention @ v  # (B, T_q, T_k) @ (B, T_k, H) -> (B, T_q, H)
+        return out, attention
+
     def forward(self, x: torch.Tensor, scale: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
-        """Returns (output, attention), the attention matrix included for inspection."""
+        """Every position at once (training). Returns (output, attention matrix)."""
         # x: (B, T, C)
         B, T, C = x.shape
 
@@ -54,23 +78,38 @@ class Head(nn.Module):
             q = apply_rope(q, self.rope_cos[:T], self.rope_sin[:T])  # (B, T, H)
             k = apply_rope(k, self.rope_cos[:T], self.rope_sin[:T])  # (B, T, H)
 
-        # How much each position wants to read from each other position:
-        # dot product of my query with every key.
-        scores = q @ k.transpose(-2, -1)  # (B, T, H) @ (B, H, T) -> (B, T, T)
+        return self._attend(q, k, v, self.tril[:T, :T], scale)  # (B, T, H), (B, T, T)
 
-        # Divide by sqrt(head_size): the dot product of H random numbers grows
-        # like sqrt(H), and without this the softmax saturates into a hard
-        # argmax, killing the gradient. See phase3.py section 2.
-        if scale:
-            scores = scores * self.head_size**-0.5  # (B, T, T)
+    def forward_cached(self, x: torch.Tensor, past: KVCache | None) -> tuple[torch.Tensor, KVCache]:
+        """Only the NEW tokens, reusing the keys and values of the past ones (generation).
 
-        # Causal mask: -inf above the diagonal, so softmax gives it probability 0.
-        scores = scores.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B, T, T)
+        The keys and values of a token depend only on that token and on what came
+        before it, never on what comes after. So once computed they never change,
+        and there is no reason to compute them again at every generated token.
+        """
+        # x: (B, T_new, C), the embeddings of the tokens not seen yet
+        B, T_new, C = x.shape
+        start = 0 if past is None else past[0].shape[1]  # absolute position of the first new token
+        end = start + T_new
+        if end > self.tril.shape[0]:
+            raise ValueError(f"KV cache full: {end} positions, but block_size is {self.tril.shape[0]}")
 
-        attention = torch.softmax(scores, dim=-1)  # (B, T, T), each row sums to 1
+        q = self.query(x)  # (B, T_new, C) -> (B, T_new, H)
+        k = self.key(x)    # (B, T_new, C) -> (B, T_new, H)
+        v = self.value(x)  # (B, T_new, C) -> (B, T_new, H)
 
-        out = attention @ v  # (B, T, T) @ (B, T, H) -> (B, T, H)
-        return out, attention
+        if self.rope:
+            # The new tokens sit at positions start..end-1, not 0..T_new-1.
+            q = apply_rope(q, self.rope_cos[start:end], self.rope_sin[start:end])  # (B, T_new, H)
+            k = apply_rope(k, self.rope_cos[start:end], self.rope_sin[start:end])  # (B, T_new, H)
+
+        if past is not None:
+            k = torch.cat([past[0], k], dim=1)  # (B, T_past, H) + (B, T_new, H) -> (B, end, H)
+            v = torch.cat([past[1], v], dim=1)  # (B, T_past, H) + (B, T_new, H) -> (B, end, H)
+
+        # Rows: the new queries (positions start..end-1). Columns: every key so far (0..end-1).
+        out, _ = self._attend(q, k, v, self.tril[start:end, :end], scale=True)  # (B, T_new, H)
+        return out, (k, v)
 
 
 class AttentionLM(nn.Module):
