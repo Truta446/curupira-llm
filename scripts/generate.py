@@ -29,7 +29,8 @@ def parse_args() -> Args:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--checkpoint", default="best.pt", help="file inside checkpoints/")
     p.add_argument("--prompt", default="\n")
-    p.add_argument("--length", type=int, default=500, help="characters to generate")
+    p.add_argument("--length", type=int, default=500,
+                   help="tokens to generate (one character each for char models, ~2.6 for BPE 1024)")
     p.add_argument("--temperature", type=float, default=0.8, help="0 = greedy")
     p.add_argument("--top-k", type=int, default=20, help="0 disables top-k")
     p.add_argument("--seed", type=int, default=None, help="fix it to get the same text again")

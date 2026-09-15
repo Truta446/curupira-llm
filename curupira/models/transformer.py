@@ -11,6 +11,7 @@ time, so every variant is the same code with a single piece swapped.
 """
 
 import math
+from collections.abc import Iterator
 from typing import Literal
 
 import torch
@@ -243,6 +244,26 @@ class GPT(nn.Module):
             if step < max_new_tokens - 1:
                 logits, cache = self.forward_cached(nxt, cache)  # only the token just chosen: (B, 1, V)
         return idx
+
+    @torch.no_grad()
+    def stream(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+    ) -> Iterator[int]:
+        """Like `generate` for one sequence, but yields each token id as soon as it is chosen.
+
+        Lets an interactive program print the text while it is being written.
+        """
+        # idx: (1, T) starting context
+        for _ in range(max_new_tokens):
+            cropped = idx[:, -self.block_size :]  # (1, min(T, block_size))
+            logits, _ = self(cropped)  # (1, T, V)
+            nxt = sample_next(logits[:, -1, :], temperature, top_k)  # (1, V) -> (1, 1)
+            idx = torch.cat([idx, nxt], dim=1)  # (1, T) -> (1, T+1)
+            yield int(nxt.item())
 
     @torch.no_grad()
     def generate(

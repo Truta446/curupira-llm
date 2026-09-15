@@ -484,6 +484,37 @@ python -m venv .venv
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
 ```
 
+### Brinque com o modelo
+
+```bash
+.venv/bin/python -m scripts.chat
+```
+
+Você digita o começo de um texto e o modelo continua, escrevendo na tela em tempo real. Por padrão ele usa o melhor modelo medido (`bpe1024_rope_best.pt`); `/modelo best.pt` troca para o modelo de letras.
+
+Uma sessão real, em CPU, com `/semente 42` e `/tamanho 25`:
+
+```
+você > --Capitu, disse eu,
+curupira > --Capitu, disse eu, rigorosamente uns dez minutos.
+Jorge quiz reflectir, Estella tinha a conver
+
+você > /mais
+curupira > …sar, uma carta de regra, de uma boa vontade, nos nomes, e as palavras,
+```
+
+Outros comandos: `/temp 1.2` (mais criativo, e mais palavras inventadas), `/topk 20`, `/semente off`, `/modelos`, `/config` e `/ajuda`. A mesma semente em CPU e em GPU sorteia textos diferentes.
+
+**Ele não é um chatbot.** Se você pedir "Faça um resumo de Dom Casmurro", ele trata o pedido como o começo de um texto e continua escrevendo "à moda de Machado", sem resumir nada. Três motivos:
+
+1. **Ele só aprendeu a continuar texto.** Nunca viu um pedido seguido de uma resposta; modelos como o ChatGPT passam por uma segunda etapa de treino com milhões desses exemplos.
+2. **Ele não enxerga o livro.** A janela é de 128 tokens (~340 letras, um parágrafo); *Dom Casmurro* tem 376 mil letras.
+3. **Ele é minúsculo.** Com 1 milhão de parâmetros e 3 MB de texto, aprendeu a **forma** do português de Machado (travessões, "elle", nomes de personagens), não o **conteúdo** das histórias.
+
+Comece como Machado começaria: `--Capitu, disse eu,` rende muito mais que `Me conte sobre Capitu`.
+
+### Tempos
+
 Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máquina (Core Ultra 9 275HX com 24 threads, RTX 5060):
 
 | Script | CPU | GPU |
@@ -524,6 +555,7 @@ curupira/            a biblioteca
 scripts/             um script por fase: só orquestra, mede e imprime
   prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py … phase7e_kvcache.py
   generate.py        gera texto a partir de um checkpoint salvo
+  chat.py            modo interativo: você começa o texto, o modelo continua em tempo real
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)
 checkpoints/         modelos salvos: best.pt e um a cada 1000 passos (fora do versionamento)
