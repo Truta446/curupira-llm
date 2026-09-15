@@ -70,6 +70,7 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | Mesmo modelo com AdamW, 4000 passos | 838.004 | 1,413 | 1,452 |
 | Mesmo modelo e treino, tokenizer BPE de 1024 tokens | 1.071.360 | — | 1,306 por caractere ¹ |
 | **BPE + RoPE no lugar da posição aprendida** | 1.054.976 | — | **1,246** por caractere ¹ |
+| BPE + RoPE + RMSNorm no lugar do LayerNorm | 1.053.824 | — | 1,248 por caractere ¹ (empate) |
 
 ¹ Média de 2 sementes aleatórias.
 
@@ -336,6 +337,32 @@ Capitu olhou para mim e ri-lhe que, de lhe escuviv talento ja a partes e menina.
 
 </details>
 
+### Upgrade 7c: RMSNorm, e um empate
+
+O LayerNorm faz duas coisas com o vetor de cada token: **centraliza** (tira a média) e **escala** (divide pelo desvio). O **RMSNorm** faz só a segunda: divide pela raiz da média dos quadrados, e dispensa o deslocamento aprendido `beta`. A aposta é que o que estabiliza o treino é controlar a **escala**; a média não importaria tanto.
+
+```
+um vetor qualquer:          [+2.00, -1.00, +0.50, +3.50]
+  LayerNorm -> [+0.45, -1.34, -0.45, +1.34]
+  RMSNorm   -> [+0.96, -0.48, +0.24, +1.67]
+o mesmo vetor, +5 em tudo:  [+7.00, +4.00, +5.50, +8.50]
+  LayerNorm -> [+0.45, -1.34, -0.45, +1.34]   <- igual: ele centraliza
+  RMSNorm   -> [+1.08, +0.62, +0.85, +1.31]   <- mudou: ele não centraliza
+```
+
+Mesma medição da 7b, agora com RoPE nas duas versões:
+
+| Normalização | Semente 1337 | Semente 2024 | **Média (loss por caractere)** | Parâmetros |
+|---|---:|---:|---:|---:|
+| LayerNorm | 1,2388 | 1,2529 | **1,2458** | 1.054.976 |
+| RMSNorm | 1,2427 | 1,2540 | 1,2484 (+0,2%) | 1.053.824 |
+
+**Veredito: empate.** O RMSNorm ficou um fio atrás nas duas sementes, mas a diferença (0,0025) é **cinco vezes menor** que a variação entre sementes (0,014). Com essa medição não dá para dizer que ele é pior, nem melhor. A linha de base reproduziu exatamente os números da 7b, e o texto gerado também empatou (89,1% de palavras reais contra 90,2%).
+
+**Então por que os LLMs modernos usam RMSNorm?** Não é pela loss, é pelo **custo**: uma conta a menos (não calcula nem subtrai a média) em cada uma das 9 normalizações, a cada passo. Nos nossos treinos na GPU, feitos intercalados, cada treino com RMSNorm levou **~73 s**, contra **79–83 s** com LayerNorm. Em modelos com bilhões de parâmetros, essa economia sem perder qualidade é o que conta.
+
+A lição: **nem todo upgrade melhora a loss**. Alguns trocam custo por qualidade igual, e só uma medição com mais de uma semente mostra a diferença entre "não ajudou" e "atrapalhou".
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -346,7 +373,7 @@ Capitu olhou para mim e ri-lhe que, de lhe escuviv talento ja a partes e menina.
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
 | 6 | Geração: temperature e top-k | ✅ |
-| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, RMSNorm, SwiGLU, KV-cache | 🚧 |
+| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, **RoPE ✅**, **RMSNorm ✅**, SwiGLU, KV-cache | 🚧 |
 
 ## Começando
 
@@ -363,6 +390,7 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase6 --device cpu   # temperature, top-k e 3 checkpoints (~3 min)
 .venv/bin/python -m scripts.phase7a_bpe           # tokenizer BPE + treino comparado (~1 min em GPU)
 .venv/bin/python -m scripts.phase7b_rope          # RoPE vs posição aprendida, 2 sementes (~5 min em GPU)
+.venv/bin/python -m scripts.phase7c_rmsnorm       # RMSNorm vs LayerNorm, 2 sementes (~5 min em GPU)
 
 # brinque com o modelo treinado
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
@@ -377,8 +405,11 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 | `phase6` (só geração, sem treino) | 3 min | — |
 | `phase7a_bpe` (4000 passos) | ~80 min (custo por passo +5% vs. letras) | 1 min |
 | `phase7b_rope` (4 treinos de 4000 passos) | não medido ² | 5 min (cada treino com RoPE ~25% mais lento) |
+| `phase7c_rmsnorm` (4 treinos de 4000 passos) | não medido ³ | 5 min (cada treino com RMSNorm ~8% mais rápido) |
 
 ² A máquina estava ocupada por outros processos durante a medição (load average 27 em 24 núcleos) e os tempos variaram mais de 10× entre rodadas; preferi não publicar um número não confiável. Em CPU, `--seeds 1337 --steps 1000` reduz a fase a 2 treinos curtos.
+
+³ Com a máquina livre, a mediana deu RMSNorm ~5% mais rápido por passo em CPU (1272 contra 1344 ms), mas as rodadas do mesmo modelo variaram 2×: a diferença é menor que o ruído da medição.
 
 Tudo roda em CPU; só demora. Para experimentar a fase 5 em CPU, `--steps 1000 --warmup 100` leva ~20 min.
 
@@ -389,7 +420,8 @@ curupira/            a biblioteca
   tokenizer.py       Tokenizer (Protocol) e CharTokenizer: cada caractere vira um inteiro
   bpe.py             BPETokenizer: merges de pares frequentes, escrito à mão
   dataset.py         load_texts, encode_splits, get_batch (x: (B,T), y: (B,T)), pick_device
-  ops.py             cross_entropy, LayerNorm, RoPE e os otimizadores SGD e AdamW, à mão
+  ops.py             cross_entropy, LayerNorm, RMSNorm, RoPE e os otimizadores SGD e AdamW, à mão
+  ablation.py        compara variantes com as mesmas sementes: placar e veredito contra o acaso
   training.py        estimate_loss, agendamento da taxa, TrainConfig e train_model
   checkpoint.py      ModelConfig, save_checkpoint e load_checkpoint
   sampling.py        temperature, top-k, greedy e o sorteio da próxima letra
@@ -400,7 +432,7 @@ curupira/            a biblioteca
     attention.py     Head: uma cabeça causal + AttentionLM
     transformer.py   MultiHeadAttention, FeedForward, Block e GPT (upgrades ligados por argumento)
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py  phase7b_rope.py
+  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py  phase7b_rope.py  phase7c_rmsnorm.py
   generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)

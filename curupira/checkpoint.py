@@ -12,7 +12,7 @@ import torch
 
 from curupira.bpe import BPETokenizer
 from curupira.dataset import ROOT
-from curupira.models.transformer import GPT, PositionKind
+from curupira.models.transformer import GPT, NormKind, PositionKind
 from curupira.tokenizer import CharTokenizer, Tokenizer
 
 CHECKPOINT_DIR: Final = ROOT / "checkpoints"
@@ -32,10 +32,11 @@ class ModelConfig:
     n_layer: int
     block_size: int
     position: PositionKind = "learned"
+    norm: NormKind = "layernorm"
 
     def build(self) -> GPT:
         return GPT(self.vocab_size, self.n_embd, self.n_head, self.n_layer, self.block_size,
-                   position=self.position)
+                   position=self.position, norm=self.norm)
 
 
 @dataclass(frozen=True)

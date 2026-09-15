@@ -1,10 +1,10 @@
-"""A Transformer block = multi-head attention + MLP + residuals + LayerNorm.
+"""A Transformer block = multi-head attention + MLP + residuals + normalization.
 
 Each piece answers one limitation of the single head from phase 3:
-    multi-head  -> several kinds of "what am I looking for?" at the same time
-    MLP         -> time to *think* about what was gathered, position by position
-    residual    -> a highway that lets gradients reach the early layers
-    LayerNorm   -> keeps the numbers in a sane range, so deep stacks train
+    multi-head    -> several kinds of "what am I looking for?" at the same time
+    MLP           -> time to *think* about what was gathered, position by position
+    residual      -> a highway that lets gradients reach the early layers
+    normalization -> keeps the numbers in a sane range, so deep stacks train
 
 Phase 7 upgrades are switched on through GPT's keyword arguments, one at a
 time, so every variant is the same code with a single piece swapped.
@@ -16,10 +16,15 @@ import torch
 import torch.nn as nn
 
 from curupira.models.attention import Head
-from curupira.ops import LayerNorm, cross_entropy
+from curupira.ops import LayerNorm, RMSNorm, cross_entropy
 from curupira.sampling import sample_next
 
 PositionKind = Literal["learned", "rope"]
+NormKind = Literal["layernorm", "rmsnorm"]
+
+
+def make_norm(kind: NormKind, dim: int) -> nn.Module:
+    return RMSNorm(dim) if kind == "rmsnorm" else LayerNorm(dim)
 
 
 class MultiHeadAttention(nn.Module):
@@ -60,11 +65,13 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """Attention (talk to the past) then MLP (think), each around a residual."""
 
-    def __init__(self, n_embd: int, n_head: int, block_size: int, rope: bool = False) -> None:
+    def __init__(
+        self, n_embd: int, n_head: int, block_size: int, rope: bool = False, norm: NormKind = "layernorm"
+    ) -> None:
         super().__init__()
-        self.ln1 = LayerNorm(n_embd)
+        self.ln1 = make_norm(norm, n_embd)
         self.attn = MultiHeadAttention(n_embd, n_head, block_size, rope)
-        self.ln2 = LayerNorm(n_embd)
+        self.ln2 = make_norm(norm, n_embd)
         self.ffwd = FeedForward(n_embd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -81,6 +88,8 @@ class GPT(nn.Module):
     position="learned": a trainable vector per slot is added to each token (phase 4).
     position="rope": no position vector at all; every attention head rotates its
     queries and keys by their position instead (phase 7b).
+    norm="layernorm" (phase 4) or "rmsnorm" (phase 7c), used everywhere a
+    normalization appears: twice per block and once before the output.
     """
 
     position_embedding: nn.Embedding | None
@@ -93,15 +102,17 @@ class GPT(nn.Module):
         n_layer: int,
         block_size: int,
         position: PositionKind = "learned",
+        norm: NormKind = "layernorm",
     ) -> None:
         super().__init__()
         self.block_size = block_size
         self.position = position
+        self.norm = norm
         self.token_embedding = nn.Embedding(vocab_size, n_embd)  # (V, C)
         self.position_embedding = nn.Embedding(block_size, n_embd) if position == "learned" else None  # (T, C)
         rope = position == "rope"
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, rope) for _ in range(n_layer)])
-        self.ln_f = LayerNorm(n_embd)                # final normalization
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, rope, norm) for _ in range(n_layer)])
+        self.ln_f = make_norm(norm, n_embd)           # final normalization
         self.lm_head = nn.Linear(n_embd, vocab_size)  # (C,) -> (V,)
 
     def forward(

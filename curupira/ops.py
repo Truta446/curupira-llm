@@ -49,6 +49,27 @@ class LayerNorm(nn.Module):
         return self.gamma * normalized + self.beta             # (..., C)
 
 
+class RMSNorm(nn.Module):
+    """Rescale each token's vector to root-mean-square 1, without centering it.
+
+    LayerNorm does two things: subtract the mean (re-centering) and divide by
+    the standard deviation (re-scaling). RMSNorm keeps only the second one,
+    dividing by sqrt(mean(x^2)), and drops the learned shift beta. The bet is
+    that the scaling is what keeps deep stacks stable; the centering is not.
+    Written by hand.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.ones(dim))  # (C,) learned scale; there is no beta
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., C)
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)  # (..., 1)
+        return self.gamma * (x / rms)  # (..., C), root-mean-square 1 before gamma
+
+
 def rope_tables(head_size: int, max_len: int, base: float = 10000.0) -> tuple[torch.Tensor, torch.Tensor]:
     """Cosines and sines of the rotation angle for every (position, channel pair).
 
