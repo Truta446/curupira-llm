@@ -24,7 +24,7 @@ Fases:
 4. Multi-head + MLP + residual + LayerNorm = bloco Transformer; empilhar N blocos.
 5. Loop de treino real: AdamW, warmup + cosine decay, avaliação periódica, checkpoints, gráfico de loss treino vs validação.
 6. Geração com temperature e top-k; comparar textos de 3 checkpoints.
-7. Upgrades modernos, um por vez, medindo o efeito na loss: BPE à mão, RoPE, RMSNorm, SwiGLU, KV-cache.
+7. Upgrades modernos, um por vez, medindo o efeito na loss: BPE à mão, RoPE, RMSNorm, SwiGLU, KV-cache. Dividida em sub-rodadas (7a BPE, 7b RoPE, 7c RMSNorm, 7d SwiGLU, 7e KV-cache), cada uma com script próprio `scripts/phase7X_nome.py`, e com a mesma parada (explicação, comando, 2 perguntas, commit, esperar) ao fim de cada sub-rodada.
 
 ## Regras de código
 
@@ -34,7 +34,8 @@ Fases:
 - **Em toda função nova, comentar o shape dos tensores em cada passo**, ex.: `# x: (B, T, C) -> (B, T, head_size)`. Convenção: `B` = batch, `T` = tamanho do contexto, `C` = dimensão do embedding, `V` = tamanho do vocabulário.
 - **Tipagem**: tudo tipado. Type hints em toda função, método, atributo de classe e constante relevante; argumentos de CLI convertidos para uma `@dataclass(frozen=True)` em vez de usar `argparse.Namespace` solto. Verificar com `npx --yes pyright@latest --pythonpath .venv/bin/python .` (config em `pyrightconfig.json`); a meta é zero erro. O pyright não é dependência do projeto, só ferramenta de conferência.
 - **Idioma**: código, nomes de arquivos, identificadores, comentários e docstrings sempre em **inglês**. Explicações ao usuário, mensagens de commit, README e as linhas explicativas que os scripts de fase imprimem (voltadas ao aprendizado do usuário) em português.
-- **Estrutura**: a biblioteca fica em `curupira/` (`tokenizer.py`, `dataset.py`, `ops.py` com `cross_entropy`/`LayerNorm`/`SGD`/`AdamW`, `training.py` com `estimate_loss`/`lr_at`, `checkpoint.py`, `sampling.py` com temperature/top-k/greedy, `text_stats.py` com % de palavras reais/distintas, `plots.py` e `models/` com `bigram.py`, `attention.py`, `transformer.py`); os scripts de cada fase ficam em `scripts/` (`prepare_data.py`, `phaseN.py`). Nada de código novo na raiz. Rodar sempre da raiz, como módulo: `.venv/bin/python -m scripts.phaseN`. Caminhos de `data/` e `assets/` são derivados de `ROOT` com `pathlib`, não de `cwd`.
+- **Comparações justas**: entre tokenizers diferentes, comparar sempre **loss por caractere** (loss por token ÷ caracteres por token), nunca loss por token. Todo número citado no README ou em constantes de script precisa ter sido **medido** (dizer onde e como); nunca estimar um valor e apresentá-lo como medição.
+- **Estrutura**: a biblioteca fica em `curupira/` (`tokenizer.py` com o `Protocol` `Tokenizer` e `CharTokenizer`, `bpe.py` com `BPETokenizer`, `dataset.py` com `load_texts`/`encode_splits`, `ops.py` com `cross_entropy`/`LayerNorm`/`SGD`/`AdamW`, `training.py` com `estimate_loss`/`lr_at`/`TrainConfig`/`train_model` (a receita da fase 5, reutilizada na fase 7), `checkpoint.py`, `sampling.py` com temperature/top-k/greedy, `text_stats.py` com % de palavras reais/distintas, `plots.py` e `models/` com `bigram.py`, `attention.py`, `transformer.py`); os scripts de cada fase ficam em `scripts/` (`prepare_data.py`, `phaseN.py`). Nada de código novo na raiz. Rodar sempre da raiz, como módulo: `.venv/bin/python -m scripts.phaseN`. Caminhos de `data/` e `assets/` são derivados de `ROOT` com `pathlib`, não de `cwd`.
 - Ao criar uma fase nova: modelo em `curupira/models/`, peças reutilizáveis em `curupira/ops.py`, e o script `scripts/phaseN.py` só orquestra e imprime.
 
 ## Ambiente
@@ -45,6 +46,7 @@ Fases:
 - Scripts que escrevem em `assets/` têm `--no-plot`; ao medir tempo ou testar, usar `--no-plot` e fazer backup de `checkpoints/` antes (a fase 5 sobrescreve `best.pt`, que a fase 6 usa).
 - Resultados até a fase 5 (loss de validação): bigram 2,367 → uma cabeça 2,323 → 4 blocos com SGD 1,887 → 4 blocos com AdamW + warmup/cosine, 4000 passos, **1,4515** (`checkpoints/best.pt`; snapshots `step01000.pt` … `step04000.pt`).
 - Fase 6 (só inferência, ~3 min em CPU): configuração padrão de geração temperature 0,8 + top-k 20 (73% de palavras reais, 76% distintas; Machado real: 98% / 61%). `scripts/generate.py` gera a partir de qualquer checkpoint.
+- Fase 7a (BPE, vocabulário 1024, merges em cache em `data/bpe_2048.json`, 2,65 caracteres/token na validação): mesmo modelo e receita da fase 5 → val 3,4727 por token = **1,3086 por caractere** (-9,8% vs. letras), `checkpoints/bpe1024_best.pt`. Distância treino→val por caractere dobrou (0,039 → 0,075): ~18 épocas sobre 920k tokens. Geração, 8×400 caracteres: BPE T 1,0 = 78,1% reais / 76,6% distintas (letras: 59,7% / 80,4%). **Linha de base para 7b–7d: 1,3086 por caractere com BPE 1024.**
 
 ## Dados
 

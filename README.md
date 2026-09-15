@@ -67,7 +67,8 @@ A **loss** mede a surpresa do modelo diante da letra certa: quanto menor, melhor
 | Uma cabeça de self-attention | 35.444 | 2,296 | 2,323 |
 | 1 bloco Transformer | 244.340 | 1,856 | 1,898 |
 | 4 blocos Transformer (SGD, 1500 passos) | 838.004 | 1,849 | 1,887 |
-| **Mesmo modelo com AdamW, 4000 passos** | 838.004 | 1,413 | **1,452** |
+| Mesmo modelo com AdamW, 4000 passos | 838.004 | 1,413 | 1,452 |
+| **Mesmo modelo e treino, tokenizer BPE de 1024 tokens** | 1.071.360 | — | **1,309** por caractere |
 
 O treino, sozinho, **redescobriu as estatísticas do livro**: chegou ao mesmo número que se obtém contando pares de letras. A tabela aprendida faz sentido — depois de `q` vem `u` com 100%, e depois de uma quebra de linha vem `-` em 48% dos casos, porque os diálogos de Machado começam com `--`.
 
@@ -232,6 +233,63 @@ No passo 4000 aparece **Escobar**, o amigo de Bentinho em *Dom Casmurro* — o m
 
 </details>
 
+### Upgrade 7a: tokenizer BPE, escrito à mão
+
+Até aqui cada token era **uma letra**: "casamento" custava 9 previsões. O **BPE** (*byte-pair encoding*) parte das letras e, repetidamente, cola o **par vizinho mais frequente** num token novo, até o vocabulário chegar ao tamanho pedido. Os primeiros merges aprendidos em Machado:
+
+```
+' ' + 'd' -> ' d'      ' d' + 'e' -> ' de'      'q' + 'u' -> 'qu'      'qu' + 'e' -> 'que'
+```
+
+Com 1024 tokens, palavras frequentes viram **um token só** (`' perguntou'`, `' respondeu'`, `' coração'`) e palavras raras são soletradas em pedaços, então nenhum texto fica impossível de codificar:
+
+```
+letras (61 tokens): |-|-|N|ã|o| |c|o|n|s|u|l|t|e|s| |d|i|c|c|i|o|n|a|r|i|o|s|,| |d|i|s|s|e| ...
+BPE    (22 tokens): |--|Não| cons|ult|es| d|ic|cio|n|ar|ios|,| disse| C|apit|u|,| olh|ando| para| mim|.|
+```
+
+| Vocabulário | Caracteres por token | Texto que cabe em 128 tokens |
+|---:|---:|---:|
+| 116 (letras) | 1,00 | 128 caracteres |
+| 512 | 2,25 | 289 caracteres |
+| **1024** | **2,69** | **345 caracteres** |
+| 2048 | 3,13 | 401 caracteres |
+
+O treino do BPE no corpus inteiro leva 3 segundos, usando contagem **incremental** de pares. Conferi contra uma versão ingênua que reconta tudo a cada merge: 284 de 284 escolhas iguais. A ida e volta `decode(encode(texto)) == texto` também foi conferida no texto de treino inteiro.
+
+**Como comparar de forma justa.** Errar um token BPE é errar ~2,7 letras de uma vez, então loss por token e loss por letra não são comparáveis. A medida justa é a **loss por caractere** = loss por token ÷ caracteres por token. Mesmo modelo, mesmo treino (4000 passos, AdamW):
+
+| Tokenizer | Loss por token | **Loss por caractere** | Parâmetros |
+|---|---:|---:|---:|
+| Letras (fase 5) | 1,452 | 1,452 | 838.004 |
+| **BPE 1024** | 3,473 | **1,309 (-9,8%)** | 1.071.360 |
+
+O custo por passo mal muda (medido em CPU: 488 ms com letras, 513 ms com BPE). O ganho vem de o modelo **enxergar ~2,7× mais texto** na mesma janela de 128 posições, e de não gastar capacidade soletrando.
+
+**O preço:** com BPE, os livros viram só 920 mil tokens, e os 4000 passos passam ~18 vezes por eles. A distância entre treino e validação, por caractere, **dobrou** (0,039 → 0,075): o modelo começou a decorar. Com um corpus tão pequeno, esse é o limite do BPE.
+
+| Configuração de geração | Palavras reais | Palavras distintas |
+|---|---:|---:|
+| Letras, temperature 1,0 | 59,7% | 80,4% |
+| **BPE 1024, temperature 1,0** | **78,1%** | 76,6% |
+| Letras, temperature 0,8 + top-k 20 | 73,3% | 75,8% |
+| BPE 1024, temperature 0,8 + top-k 20 | 93,5% | 46,7% |
+
+Sem top-k, o BPE escreve muito mais palavras reais com variedade parecida. Com top-k 20 ele fica repetitivo, porque escolher entre 20 **tokens** (que valem várias letras) é bem mais restritivo do que escolher entre 20 letras: um ajuste de geração não se transporta automaticamente de um tokenizer para outro.
+
+<details>
+<summary><b>Texto gerado com BPE</b></summary>
+
+```
+Capitu olhou para mim e ridiculado. Não é a ninguem; é verdade. Um dia, se amo não era
+ingleza. Tinha que eu gostava, como se podia ser muito. Então não querendo. Ayres não sei
+que ha mais, é a minha declaração, que já a moça não era indole do ceu.
+```
+
+Frases inteiras com sujeito e verbo, e **Ayres**, o narrador de *Esaú e Jacó* e *Memorial de Aires*.
+
+</details>
+
 ## Roteiro
 
 | Fase | Conteúdo | Status |
@@ -242,7 +300,7 @@ No passo 4000 aparece **Escobar**, o amigo de Bentinho em *Dom Casmurro* — o m
 | 4 | Bloco Transformer: multi-head, MLP, residual, LayerNorm | ✅ |
 | 5 | Treino de verdade: AdamW, warmup + cosine, checkpoints | ✅ |
 | 6 | Geração: temperature e top-k | ✅ |
-| 7 | Upgrades modernos: BPE, RoPE, RMSNorm, SwiGLU, KV-cache | 🚧 |
+| 7 | Upgrades modernos, um de cada vez: **BPE ✅**, RoPE, RMSNorm, SwiGLU, KV-cache | 🚧 |
 
 ## Começando
 
@@ -257,6 +315,7 @@ python -m venv .venv
 .venv/bin/python -m scripts.phase4 --device cpu   # blocos Transformer (~20 min; 30 s em GPU)
 .venv/bin/python -m scripts.phase5                # treino de verdade + checkpoints (~1 min em GPU)
 .venv/bin/python -m scripts.phase6 --device cpu   # temperature, top-k e 3 checkpoints (~3 min)
+.venv/bin/python -m scripts.phase7a_bpe           # tokenizer BPE + treino comparado (~1 min em GPU)
 
 # brinque com o modelo treinado
 .venv/bin/python -m scripts.generate --prompt "Capitu olhou para mim e " --temperature 0.8 --top-k 20
@@ -269,6 +328,7 @@ Sem a flag `--device`, o código usa a GPU se houver. Tempos medidos nesta máqu
 | `phase4` (1500 passos, dois modelos) | ~20 min | 30 s |
 | `phase5` (4000 passos) | ~80 min (~1,1 s/passo) | 1 min |
 | `phase6` (só geração, sem treino) | 3 min | — |
+| `phase7a_bpe` (4000 passos) | ~80 min (custo por passo +5% vs. letras) | 1 min |
 
 Tudo roda em CPU; só demora. Para experimentar a fase 5 em CPU, `--steps 1000 --warmup 100` leva ~20 min.
 
@@ -276,10 +336,11 @@ Tudo roda em CPU; só demora. Para experimentar a fase 5 em CPU, `--steps 1000 -
 
 ```
 curupira/            a biblioteca
-  tokenizer.py       CharTokenizer: cada caractere vira um inteiro
-  dataset.py         load_data, get_batch (x: (B,T), y: (B,T)), pick_device
+  tokenizer.py       Tokenizer (Protocol) e CharTokenizer: cada caractere vira um inteiro
+  bpe.py             BPETokenizer: merges de pares frequentes, escrito à mão
+  dataset.py         load_texts, encode_splits, get_batch (x: (B,T), y: (B,T)), pick_device
   ops.py             cross_entropy, LayerNorm e os otimizadores SGD e AdamW, à mão
-  training.py        estimate_loss, agendamento da taxa (warmup + cosine)
+  training.py        estimate_loss, agendamento da taxa, TrainConfig e train_model
   checkpoint.py      ModelConfig, save_checkpoint e load_checkpoint
   sampling.py        temperature, top-k, greedy e o sorteio da próxima letra
   text_stats.py      % de palavras reais e distintas no texto gerado
@@ -289,7 +350,7 @@ curupira/            a biblioteca
     attention.py     Head: uma cabeça causal + AttentionLM
     transformer.py   MultiHeadAttention, FeedForward, Block e GPT
 scripts/             um script por fase: só orquestra, mede e imprime
-  prepare_data.py  phase1.py … phase6.py
+  prepare_data.py  phase1.py … phase6.py  phase7a_bpe.py
   generate.py        gera texto a partir de um checkpoint salvo
 assets/              banner e gráficos do README
 data/                corpus baixado (fora do versionamento)

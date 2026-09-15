@@ -24,7 +24,7 @@ from curupira.models.transformer import GPT
 from curupira.plots import save_temperature_sweep
 from curupira.sampling import effective_choices, next_token_probs
 from curupira.text_stats import WordStats, corpus_vocabulary, word_stats
-from curupira.tokenizer import CharTokenizer
+from curupira.tokenizer import Tokenizer
 
 SWEEP_TEMPERATURES: Final = (0.3, 0.5, 0.7, 0.9, 1.1, 1.3, 1.6, 2.0)
 SWEEP_SEQUENCES: Final = 8   # generated in parallel, as one batch
@@ -62,7 +62,7 @@ def section(title: str) -> None:
 
 
 @torch.no_grad()
-def show_distribution(model: GPT, tok: CharTokenizer, prompt: str, temperature: float,
+def show_distribution(model: GPT, tok: Tokenizer, prompt: str, temperature: float,
                       top_k: int | None, device: str, rows: int = 8) -> None:
     """Print the most likely next characters as a bar chart."""
     idx = torch.tensor([tok.encode(prompt)], device=device)  # (1, T)
@@ -75,11 +75,11 @@ def show_distribution(model: GPT, tok: CharTokenizer, prompt: str, temperature: 
     print(f"\n  {setting}: hesitando entre ~{effective_choices(probs):.1f} caracteres "
           f"({kept} com chance > 0)")
     for p, i in zip(top.values.tolist(), top.indices.tolist()):
-        shown = tok.itos[i].replace(" ", "espaço").replace("\n", "\\n")
+        shown = tok.decode([i]).replace(" ", "espaço").replace("\n", "\\n")
         print(f"    {shown:>7} {p:6.1%} {'█' * round(p * 50)}")
 
 
-def generate_text(model: GPT, tok: CharTokenizer, prompt: str, length: int, temperature: float,
+def generate_text(model: GPT, tok: Tokenizer, prompt: str, length: int, temperature: float,
                   top_k: int | None, seed: int, device: str) -> str:
     torch.manual_seed(seed)  # same seed = same random draws, so only the settings differ
     idx = torch.tensor([tok.encode(prompt)], device=device)  # (1, T)
@@ -87,11 +87,11 @@ def generate_text(model: GPT, tok: CharTokenizer, prompt: str, length: int, temp
     return tok.decode(out[0])
 
 
-def sample_stats(model: GPT, tok: CharTokenizer, vocabulary: set[str], temperature: float,
+def sample_stats(model: GPT, tok: Tokenizer, vocabulary: set[str], temperature: float,
                  top_k: int | None, seed: int, device: str) -> WordStats:
     """Generate a batch of independent sequences and measure their words."""
     torch.manual_seed(seed)
-    start = torch.full((SWEEP_SEQUENCES, 1), tok.stoi["\n"], device=device)  # (B, 1)
+    start = torch.full((SWEEP_SEQUENCES, 1), tok.encode("\n")[0], device=device)  # (B, 1)
     out = model.generate(start, SWEEP_LENGTH, temperature=temperature, top_k=top_k)  # (B, 1 + length)
     text = "\n".join(tok.decode(row[1:]) for row in out)  # B sequences, start token dropped
     return word_stats(text, vocabulary)
@@ -108,7 +108,7 @@ def main() -> None:
 
     # ------------------------------------------------------------------
     section("1. The three checkpoints")
-    loaded: list[tuple[GPT, CharTokenizer, CheckpointInfo]] = []
+    loaded: list[tuple[GPT, Tokenizer, CheckpointInfo]] = []
     for name in args.checkpoints:
         model, tok, info = load_checkpoint(CHECKPOINT_DIR / name, device)
         loaded.append((model, tok, info))

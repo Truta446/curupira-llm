@@ -1,7 +1,7 @@
 """Saving and restoring models.
 
 A checkpoint holds everything needed to rebuild the model later: the weights,
-the shape of the architecture, the vocabulary and where training was.
+the shape of the architecture, the tokenizer and where training was.
 """
 
 from dataclasses import asdict, dataclass
@@ -10,9 +10,10 @@ from typing import Any, Final
 
 import torch
 
+from curupira.bpe import BPETokenizer
 from curupira.dataset import ROOT
 from curupira.models.transformer import GPT
-from curupira.tokenizer import CharTokenizer
+from curupira.tokenizer import CharTokenizer, Tokenizer
 
 CHECKPOINT_DIR: Final = ROOT / "checkpoints"
 
@@ -40,15 +41,21 @@ class CheckpointInfo:
     config: ModelConfig
 
 
+def tokenizer_from_dict(data: dict[str, Any]) -> Tokenizer:
+    if data["kind"] == "bpe":
+        return BPETokenizer.from_dict(data)
+    return CharTokenizer(data["chars"])
+
+
 def save_checkpoint(
-    path: Path, model: GPT, config: ModelConfig, tokenizer: CharTokenizer, step: int, val_loss: float
+    path: Path, model: GPT, config: ModelConfig, tokenizer: Tokenizer, step: int, val_loss: float
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "model_state": model.state_dict(),
             "config": asdict(config),
-            "chars": tokenizer.chars,  # so text can be decoded without the corpus
+            "tokenizer": tokenizer.to_dict(),  # so text can be decoded without the corpus
             "step": step,
             "val_loss": val_loss,
         },
@@ -56,15 +63,16 @@ def save_checkpoint(
     )
 
 
-def load_checkpoint(path: Path, device: str = "cpu") -> tuple[GPT, CharTokenizer, CheckpointInfo]:
+def load_checkpoint(path: Path, device: str = "cpu") -> tuple[GPT, Tokenizer, CheckpointInfo]:
     """Rebuild the model from a checkpoint file, ready for inference."""
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found: run `python -m scripts.phase5` first")
+        raise FileNotFoundError(f"{path} not found: run the training script that writes it first")
     blob: dict[str, Any] = torch.load(path, map_location=device, weights_only=False)
     config = ModelConfig(**blob["config"])
     model = config.build().to(device)
     model.load_state_dict(blob["model_state"])
     model.eval()
-    tokenizer = CharTokenizer(blob["chars"])
+    # Checkpoints from phase 5 predate the "tokenizer" field and only stored the characters.
+    tokenizer = tokenizer_from_dict(blob["tokenizer"]) if "tokenizer" in blob else CharTokenizer(blob["chars"])
     info = CheckpointInfo(step=int(blob["step"]), val_loss=float(blob["val_loss"]), config=config)
     return model, tokenizer, info

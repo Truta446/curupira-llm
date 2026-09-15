@@ -1,16 +1,29 @@
-"""Character-level tokenizer for curupira-llm.
+"""Tokenizers for curupira-llm.
 
-The simplest possible tokenization: every distinct character in the corpus
-becomes one token, i.e. an integer in [0, V), where V = vocabulary size.
-No merges, no subwords (that comes with BPE in phase 7).
+`Tokenizer` is what the rest of the code relies on. `CharTokenizer` is the
+simplest possible one: every distinct character in the corpus becomes one
+token, i.e. an integer in [0, V), where V = vocabulary size. The subword
+tokenizer lives in `curupira/bpe.py`.
 """
 
 import json
 import os
 from collections.abc import Iterable, Sequence
-from typing import Self
+from typing import Any, Protocol, Self
 
 import torch
+
+
+class Tokenizer(Protocol):
+    """Anything that turns text into ids and back."""
+
+    vocab_size: int
+
+    def encode(self, text: str) -> list[int]: ...
+
+    def decode(self, ids: Sequence[int] | torch.Tensor) -> str: ...
+
+    def to_dict(self) -> dict[str, Any]: ...
 
 
 class CharTokenizer:
@@ -44,9 +57,12 @@ class CharTokenizer:
         id_list: list[int] = ids.tolist() if isinstance(ids, torch.Tensor) else list(ids)
         return "".join(self.itos[i] for i in id_list)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "char", "chars": self.chars}
+
     def save(self, path: str | os.PathLike[str]) -> None:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"chars": self.chars}, f, ensure_ascii=False)
+            json.dump(self.to_dict(), f, ensure_ascii=False)
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Self:

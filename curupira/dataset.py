@@ -9,7 +9,7 @@ from typing import Final
 
 import torch
 
-from curupira.tokenizer import CharTokenizer
+from curupira.tokenizer import CharTokenizer, Tokenizer
 
 ROOT: Final = Path(__file__).resolve().parent.parent  # repository root
 DATA_DIR: Final = ROOT / "data"
@@ -24,22 +24,30 @@ def pick_device(requested: str = "auto") -> str:
     return requested
 
 
+def load_texts() -> tuple[str, str]:
+    """The raw (train, val) texts."""
+    return TRAIN_FILE.read_text(encoding="utf-8"), VAL_FILE.read_text(encoding="utf-8")
+
+
+def encode_splits(tok: Tokenizer, train_text: str, val_text: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Encode both splits with any tokenizer."""
+    # str of N_train chars -> (N_train_tokens,) integers
+    train = torch.tensor(tok.encode(train_text), dtype=torch.long)
+    # str of N_val chars -> (N_val_tokens,) integers
+    val = torch.tensor(tok.encode(val_text), dtype=torch.long)
+    return train, val
+
+
 def load_data() -> tuple[CharTokenizer, torch.Tensor, torch.Tensor]:
-    """Read the texts, build the tokenizer and return (tokenizer, train, val).
+    """Read the texts, build the char tokenizer and return (tokenizer, train, val).
 
     The vocabulary is built from train + val together. At char level this is
     safe (it leaks no content, only the character set) and prevents a rare
     validation character from having no id.
     """
-    train_text = TRAIN_FILE.read_text(encoding="utf-8")
-    val_text = VAL_FILE.read_text(encoding="utf-8")
-
+    train_text, val_text = load_texts()
     tok = CharTokenizer.from_text(train_text + val_text)
-
-    # str of N_train chars -> (N_train,) integers
-    train = torch.tensor(tok.encode(train_text), dtype=torch.long)
-    # str of N_val chars -> (N_val,) integers
-    val = torch.tensor(tok.encode(val_text), dtype=torch.long)
+    train, val = encode_splits(tok, train_text, val_text)
     return tok, train, val
 
 
